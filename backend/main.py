@@ -1,16 +1,38 @@
 from __future__ import annotations
 
 import re
+from contextlib import asynccontextmanager
 from typing import Any, List
 
 import fitz  # PyMuPDF
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from classifier import mock_classify
+from database import Base, engine, get_db
+from models import Contract, ParsedClause
 
 
-app = FastAPI()
+# ---------------------------------------------------------------------------
+# Application lifespan — create tables on startup
+# ---------------------------------------------------------------------------
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Create all tables when the app starts (dev convenience)."""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _is_pdf_upload(upload: UploadFile) -> bool:
     content_type = (upload.content_type or "").lower()
@@ -24,10 +46,11 @@ def _error_envelope(
     detail: str,
     status_code: int = 400,
 ) -> dict[str, Any]:
-    # Exact error envelope required by the Step 0 API contract.
+    # Exact error envelope required by the Step 1 API contract.
     return {
         "status": "error",
         "filename": filename,
+        "contract_id": None,
         "parsed_clauses": [],
         "detail": detail,
     }
@@ -55,7 +78,10 @@ async def http_exception_handler(
     )
 
 
-# Allow the Next.js dev server to talk to FastAPI locally.
+# ---------------------------------------------------------------------------
+# CORS — Allow the Next.js dev server to talk to FastAPI locally.
+# ---------------------------------------------------------------------------
+
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -70,8 +96,15 @@ app.add_middleware(
 )
 
 
+# ---------------------------------------------------------------------------
+# Upload endpoint — Step 1: parse → classify → persist → return handoff JSON
+# ---------------------------------------------------------------------------
+
 @app.post("/api/contracts/upload")
-async def upload_contract(file: UploadFile = File(...)) -> dict[str, Any]:
+async def upload_contract(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
     filename = file.filename or "uploaded.pdf"
 
     if not _is_pdf_upload(file):
@@ -114,28 +147,63 @@ async def upload_contract(file: UploadFile = File(...)) -> dict[str, Any]:
 
         # Naive segmentation: split on blank lines.
         segments = re.split(r"\n\s*\n", full_text)
-        parsed_clauses = []
+
+        # --- Classify each segment ---
+        classified = []
         clause_index = 1
         for segment in segments:
             cleaned = segment.strip()
             if not cleaned:
                 continue
-            parsed_clauses.append(
-                {
-                    "clause_index": clause_index,
-                    "raw_text": cleaned,
-                }
-            )
+            ctype, confidence = mock_classify(cleaned)
+            classified.append({
+                "clause_index": clause_index,
+                "raw_text": cleaned,
+                "clause_type": ctype,
+                "clause_type_confidence": confidence,
+            })
             clause_index += 1
 
+        # --- Persist to PostgreSQL ---
+        contract = Contract(original_filename=filename)
+        db.add(contract)
+        await db.flush()  # populates contract.id
+
+        clause_rows: list[ParsedClause] = []
+        for item in classified:
+            row = ParsedClause(
+                contract_id=contract.id,
+                clause_index=item["clause_index"],
+                raw_text=item["raw_text"],
+                clause_type=item["clause_type"],
+                clause_type_confidence=item["clause_type_confidence"],
+            )
+            db.add(row)
+            clause_rows.append(row)
+
+        await db.commit()
+
+        # --- Build handoff response ---
         return {
             "status": "success",
             "filename": filename,
-            "parsed_clauses": parsed_clauses,
+            "contract_id": str(contract.id),
+            "parsed_clauses": [
+                {
+                    "parsed_clause_id": str(row.id),
+                    "contract_id": str(contract.id),
+                    "clause_index": row.clause_index,
+                    "raw_text": row.raw_text,
+                    "clause_type": row.clause_type,
+                    "clause_type_confidence": float(row.clause_type_confidence),
+                }
+                for row in clause_rows
+            ],
         }
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(
             status_code=400,
             detail={"filename": filename, "message": "Failed to parse PDF."},
         )
-
