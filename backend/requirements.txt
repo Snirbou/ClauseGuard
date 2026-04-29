@@ -1,8 +1,17 @@
+# Web framework & server
 fastapi
 uvicorn
 python-multipart
+
+# PDF parsing
 PyMuPDF
+
+# Database (Developer 1)
 sqlalchemy[asyncio]
 asyncpg
 pydantic-settings
 python-dotenv
+
+# DSPy pipeline (Developer 2)
+dspy-ai
+openai
