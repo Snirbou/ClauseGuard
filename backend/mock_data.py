@@ -146,4 +146,6 @@ def get_mock_clauses() -> list[ClauseInput]:
     These are realistic (but entirely fictional) contract clauses that exercise
     every branch of the DSPy pipeline.
     """
-    return [ClauseInput(**raw) for raw in _MOCK_CLAUSES_RAW]
+    return [
+        ClauseInput(**data) for data in _MOCK_CLAUSES_RAW[:1]
+    ]

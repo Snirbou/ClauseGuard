@@ -1,50 +1,38 @@
 """
-dspy_pipeline.py — Core DSPy pipeline for ClauseGuard (Developer 2, Step 1).
+dspy_pipeline.py — Core DSPy pipeline for ClauseGuard (Developer 2, Stage 2).
 
 ARCHITECTURE
 ------------
-1. ContractClauseAnalysis  — DSPy Signature (defines I/O contract for the LLM)
-2. ClauseAnalyzer          — DSPy Module (wraps ChainOfThought)
-3. configure_lm()          — Sets the global DSPy LM (OpenAI by default)
-4. process_clauses()       — Batch-processes a list of ClauseInput → ClauseAnalysisResult
-
-STAGE 1 FOCUS
--------------
-This module focuses on the core logic flow: DB/mock data → DSPy → structured output.
-Complex risk scoring (numeric), DSPy optimizers (MIPROv2), and prompt compilation
-will be added in Stage 2.
-
-LLM PROVIDER
-------------
-Defaults to OpenAI gpt-4o-mini (cost-efficient for development).
-To switch to Ollama (local/free):
-
-    configure_lm(provider="ollama", model="llama3.2")
-
-Both paths use the same dspy.LM API.
+1. ContractClauseAnalysisV2  — DSPy Signature (defines I/O contract for the LLM)
+2. ClauseAnalyzerV2          — DSPy Module (wraps ChainOfThought)
+3. configure_lm()            — Sets the global DSPy LM (OpenAI / Ollama)
+4. process_clauses()         — Batch-processes a list of ClauseInput → ClauseAnalysisResult
 """
 
 from __future__ import annotations
 
 import os
+import re
 
 import dspy
 
+from logger import get_logger
 from schemas import ClauseAnalysisResult, ClauseInput
 
+logger = get_logger(__name__)
+
 
 # ---------------------------------------------------------------------------
-# 1. DSPy Signature — defines the I/O contract for the LLM
+# 1. DSPy Signature
 # ---------------------------------------------------------------------------
 
-class ContractClauseAnalysis(dspy.Signature):
+class ContractClauseAnalysisV2(dspy.Signature):
     """
     Analyze a single legal contract clause and produce a plain-language
-    explanation alongside an initial risk assessment for a non-lawyer user.
+    explanation alongside a detailed risk assessment.
 
-    You are a legal document assistant helping ordinary people understand
-    the contracts they sign.  Be concise, factual, and avoid legal jargon.
-    Risk level must be exactly one of: low, medium, or high.
+    You are an expert legal document assistant helping ordinary people understand
+    the contracts they sign. Be concise, factual, and avoid legal jargon.
     """
 
     # --- Inputs ---
@@ -66,50 +54,41 @@ class ContractClauseAnalysis(dspy.Signature):
     plain_language_summary: str = dspy.OutputField(
         desc=(
             "A 2–4 sentence plain-English explanation of what this clause means "
-            "for the person signing the contract.  Highlight any important "
+            "for the person signing the contract. Highlight any important "
             "obligations, rights, or restrictions that affect the signer."
         )
     )
-    initial_risk_assessment: str = dspy.OutputField(
+    risk_factors: str = dspy.OutputField(
         desc=(
-            "A single word risk level: 'low', 'medium', or 'high'.  "
-            "'high' means the clause significantly limits the signer's rights or "
-            "imposes major obligations.  'medium' means the clause is notable but "
-            "standard.  'low' means the clause is routine and non-burdensome."
+            "A comma-separated list of specific reasons why this clause might be "
+            "problematic or risky for the signer. E.g., 'No pre-existing IP carve-out, "
+            "Uncapped liability'. If no major risks, output 'None'."
+        )
+    )
+    dspy_risk_score: str = dspy.OutputField(
+        desc=(
+            "A single float value between 0.0 and 1.0 representing the risk severity. "
+            "0.0 is completely harmless, 1.0 is extremely dangerous/burdensome. "
+            "Output ONLY the float number, nothing else."
         )
     )
 
 
 # ---------------------------------------------------------------------------
-# 2. DSPy Module — wraps ChainOfThought over the Signature
+# 2. DSPy Module
 # ---------------------------------------------------------------------------
 
-class ClauseAnalyzer(dspy.Module):
+class ClauseAnalyzerV2(dspy.Module):
     """
     A DSPy module that uses ChainOfThought reasoning to analyze legal clauses.
-
-    ChainOfThought is used (rather than Predict) so that the LLM is
-    encouraged to reason step-by-step before producing the final outputs.
-    This improves output quality, especially for the risk assessment, and
-    makes the reasoning transparent for future DSPy optimization.
     """
 
     def __init__(self) -> None:
         super().__init__()
-        self.analyze = dspy.ChainOfThought(ContractClauseAnalysis)
+        self.analyze = dspy.ChainOfThought(ContractClauseAnalysisV2)
 
     def forward(self, raw_text: str, clause_type: str) -> dspy.Prediction:
-        """
-        Run the ChainOfThought analysis on a single clause.
-
-        Args:
-            raw_text:    Verbatim clause text.
-            clause_type: Predicted semantic category from the classifier.
-
-        Returns:
-            A ``dspy.Prediction`` with ``plain_language_summary`` and
-            ``initial_risk_assessment`` fields.
-        """
+        """Run the analysis."""
         return self.analyze(raw_text=raw_text, clause_type=clause_type)
 
 
@@ -123,41 +102,11 @@ def configure_lm(
     api_key: str | None = None,
     base_url: str | None = None,
 ) -> None:
-    """
-    Configure the global DSPy language model.
-
-    Parameters
-    ----------
-    provider : str
-        LLM provider.  Supported values:
-          - "openai"  — Uses OpenAI API (requires OPENAI_API_KEY in .env)
-          - "ollama"  — Uses a locally-running Ollama server (free, no key needed)
-    model : str
-        Model identifier.
-        OpenAI examples : "gpt-4o-mini" (cheap dev), "gpt-4o" (higher quality)
-        Ollama examples : "llama3.2", "mistral", "phi3"
-    api_key : str | None
-        Override API key.  If None, reads OPENAI_API_KEY from the environment.
-    base_url : str | None
-        Override base URL.  Set automatically for Ollama if not provided.
-
-    Examples
-    --------
-    # OpenAI (default)
-    configure_lm()
-
-    # Ollama local server
-    configure_lm(provider="ollama", model="llama3.2")
-
-    # Explicit OpenAI model
-    configure_lm(model="gpt-4o")
-    """
     if provider == "openai":
         resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not resolved_key:
             raise EnvironmentError(
-                "OPENAI_API_KEY is not set.  "
-                "Add it to backend/.env or export it as an environment variable."
+                "OPENAI_API_KEY is not set. Add it to backend/.env."
             )
         lm = dspy.LM(
             model=f"openai/{model}",
@@ -172,49 +121,69 @@ def configure_lm(
         )
 
     else:
-        raise ValueError(
-            f"Unsupported provider '{provider}'.  Choose 'openai' or 'ollama'."
-        )
+        raise ValueError(f"Unsupported provider '{provider}'.")
 
     dspy.configure(lm=lm)
-    print(f"[DSPy] LM configured: provider={provider}, model={model}")
+    logger.info("DSPy LM configured: provider=%s, model=%s", provider, model)
 
 
 # ---------------------------------------------------------------------------
 # 4. Batch Processing
 # ---------------------------------------------------------------------------
 
-def process_clauses(clauses: list[ClauseInput]) -> list[ClauseAnalysisResult]:
+def _parse_risk_factors(raw: str) -> list[str]:
+    """Parse comma-separated string or numbered list into a Python list."""
+    if not raw or raw.strip().lower() in ("none", "n/a", "null"):
+        return []
+    # Try splitting by newline first if it looks like a list
+    if "\n" in raw:
+        items = [re.sub(r"^[\-\*\d\.\s]+", "", line).strip() for line in raw.split("\n")]
+    else:
+        items = [item.strip() for item in raw.split(",")]
+    return [item for item in items if item]
+
+
+def _parse_risk_score(raw: str) -> float:
+    """Extract float from LLM output, clamp to 0.0-1.0."""
+    try:
+        # Find first number sequence that looks like a float
+        match = re.search(r"0?\.\d+", raw)
+        if match:
+            val = float(match.group(0))
+        else:
+            # Fallback if it just returned an integer
+            match_int = re.search(r"[01]", raw)
+            val = float(match_int.group(0)) if match_int else 0.5
+    except Exception:
+        val = 0.5
+    return max(0.0, min(1.0, val))
+
+
+def _score_to_level(score: float) -> str:
+    """Convert float score to categorical risk level."""
+    if score < 0.4:
+        return "low"
+    if score < 0.7:
+        return "medium"
+    return "high"
+
+
+def process_clauses(
+    clauses: list[ClauseInput],
+    analyzer: dspy.Module | None = None,
+) -> list[ClauseAnalysisResult]:
     """
-    Run the ClauseAnalyzer DSPy pipeline over a list of clauses.
-
-    This is the main integration point that Developer 1's FastAPI endpoint
-    (or the CLI runner) will call.
-
-    Parameters
-    ----------
-    clauses : list[ClauseInput]
-        Parsed clauses from Developer 1's handoff (DB or mock data).
-
-    Returns
-    -------
-    list[ClauseAnalysisResult]
-        Enriched results ready to be stored in the ``risk_scores`` table
-        or returned directly to the frontend.
-
-    Notes
-    -----
-    Processing is synchronous and sequential in Stage 1.
-    Concurrent processing (asyncio.gather / ThreadPoolExecutor) will be
-    added in Stage 2 once the pipeline is stable.
+    Run the DSPy pipeline over a list of clauses.
+    Accepts an injected analyzer (for optimized programs).
     """
-    analyzer = ClauseAnalyzer()
+    analyzer = analyzer or ClauseAnalyzerV2()
     results: list[ClauseAnalysisResult] = []
 
     for clause in clauses:
-        print(
-            f"  >> Processing clause [{clause.clause_type}] "
-            f"(id: {str(clause.parsed_clause_id)[:8]}...)"
+        logger.info(
+            "Processing clause [%s] (id: %s...)",
+            clause.clause_type,
+            str(clause.parsed_clause_id)[:8],
         )
         try:
             prediction = analyzer(
@@ -222,22 +191,22 @@ def process_clauses(clauses: list[ClauseInput]) -> list[ClauseAnalysisResult]:
                 clause_type=clause.clause_type,
             )
 
-            # Normalise risk level to lowercase and guard against unexpected values
-            raw_risk = prediction.initial_risk_assessment.strip().lower()
-            valid_risk_levels = {"low", "medium", "high"}
-            risk_level = raw_risk if raw_risk in valid_risk_levels else "medium"
+            score = _parse_risk_score(prediction.dspy_risk_score)
+            factors = _parse_risk_factors(prediction.risk_factors)
+            level = _score_to_level(score)
 
             result = ClauseAnalysisResult(
                 parsed_clause_id=clause.parsed_clause_id,
                 contract_id=clause.contract_id,
                 clause_type=clause.clause_type,
                 plain_language_summary=prediction.plain_language_summary.strip(),
-                initial_risk_assessment=risk_level,
+                risk_factors=factors,
+                dspy_risk_score=score,
+                risk_level=level,
             )
             results.append(result)
 
-        except Exception as exc:  # noqa: BLE001
-            # Log the error but continue processing remaining clauses
-            print(f"  x Error processing clause {clause.parsed_clause_id}: {exc}")
+        except Exception as exc:
+            logger.error("Error processing clause %s: %s", clause.parsed_clause_id, exc, exc_info=True)
 
     return results

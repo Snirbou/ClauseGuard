@@ -19,7 +19,7 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 
 from database import Base
@@ -76,3 +76,40 @@ class ParsedClause(Base):
 
     # Relationship
     contract = relationship("Contract", back_populates="parsed_clauses")
+    risk_score = relationship(
+        "RiskScore",
+        back_populates="parsed_clause",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+
+class RiskScore(Base):
+    __tablename__ = "risk_scores"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    parsed_clause_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("parsed_clauses.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+    )
+    risk_level = Column(String(16), nullable=False)
+    risk_score = Column(Numeric(5, 4), nullable=False)
+    risk_percentile = Column(Integer, nullable=True)
+    risk_factors = Column(JSONB, nullable=True)
+    plain_language_summary = Column(Text, nullable=True)
+    ml_model_version_id = Column(UUID(as_uuid=True), nullable=True)
+    dspy_program_version = Column(String(128), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    # Relationship
+    parsed_clause = relationship("ParsedClause", back_populates="risk_score")
