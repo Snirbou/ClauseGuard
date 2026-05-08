@@ -15,3 +15,13 @@ python-dotenv
 # DSPy pipeline (Developer 2)
 dspy-ai
 openai
+
+# Layer 1 ML classifier (loads backend/models/clause_classifier_v1.joblib)
+# Versions pinned to training env to avoid sklearn unpickle-version warnings.
+# spaCy model is NOT pip-resolvable; install separately:
+#   python -m spacy download en_core_web_lg-3.7.1 --direct
+scikit-learn==1.5.2
+spacy==3.7.5
+joblib==1.4.2
+numpy~=1.26.0
+scipy~=1.13.0

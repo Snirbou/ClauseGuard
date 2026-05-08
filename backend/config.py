@@ -17,6 +17,8 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://clauseguard:clauseguard@localhost:5432/clauseguard"
     )
 
+    openai_api_key: str | None = None
+
 
 # Module-level singleton — import this wherever settings are needed.
 settings = Settings()

@@ -1,0 +1,47 @@
+{
+  "artifact_name": "clause_classifier_v1",
+  "trained_at_utc": "2026-05-04T23:26:37.641107+00:00",
+  "labels": [
+    "confidentiality",
+    "general",
+    "governing_law",
+    "ip_assignment",
+    "liability",
+    "payment_terms",
+    "scope_of_work",
+    "termination"
+  ],
+  "expected_labels": [
+    "ip_assignment",
+    "payment_terms",
+    "termination",
+    "liability",
+    "confidentiality",
+    "scope_of_work",
+    "governing_law",
+    "general"
+  ],
+  "labels_match_expected": true,
+  "sklearn_version": "1.5.2",
+  "spacy_version": "3.7.5",
+  "spacy_model": "en_core_web_lg",
+  "spacy_model_version": "3.7.1",
+  "test_metrics": {
+    "test_macro_f1": 0.929407607131238,
+    "per_class_f1": {
+      "confidentiality": 0.9504132231404959,
+      "general": 0.9045643153526971,
+      "governing_law": 0.9914529914529915,
+      "ip_assignment": 0.9364161849710982,
+      "liability": 0.8814814814814815,
+      "payment_terms": 0.9496402877697842,
+      "scope_of_work": 0.91875,
+      "termination": 0.902542372881356,
+      "macro avg": 0.929407607131238,
+      "weighted avg": 0.930430608607498
+    },
+    "n_train": 23110,
+    "n_test": 2568,
+    "general_cap_multiplier": 1.5
+  }
+}

@@ -3,16 +3,19 @@ from __future__ import annotations
 import re
 from contextlib import asynccontextmanager
 from typing import Any, List
+from uuid import UUID
 
 import fitz  # PyMuPDF
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from classifier import mock_classify
+from classifier import classify
 from database import Base, engine, get_db
-from models import Contract, ParsedClause
+from models import Contract, ParsedClause, RiskScore
+from schemas import ClauseResult, ContractResultsResponse
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +158,7 @@ async def upload_contract(
             cleaned = segment.strip()
             if not cleaned:
                 continue
-            ctype, confidence = mock_classify(cleaned)
+            ctype, confidence = classify(cleaned)
             classified.append({
                 "clause_index": clause_index,
                 "raw_text": cleaned,
@@ -207,3 +210,88 @@ async def upload_contract(
             status_code=400,
             detail={"filename": filename, "message": "Failed to parse PDF."},
         )
+
+
+# ---------------------------------------------------------------------------
+# Read endpoint — Layer 3: GET enriched analysis (L1 + L2 + L3) for a contract.
+# Partial-state contract: clauses without a risk_scores row return null L2/L3
+# fields. The DSPy pipeline runs separately (run_pipeline.py) and is not
+# auto-triggered by this endpoint.
+# ---------------------------------------------------------------------------
+
+UPL_DISCLAIMER = (
+    "ClauseGuard provides informational analysis only. It is not legal advice "
+    "and does not create an attorney-client relationship. Consult a qualified "
+    "lawyer for advice on your specific contract."
+)
+
+
+def _results_error(
+    *,
+    contract_id: str,
+    detail: str,
+    status_code: int,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": "error",
+            "contract_id": contract_id,
+            "filename": "",
+            "clauses": [],
+            "disclaimer": UPL_DISCLAIMER,
+            "detail": detail,
+        },
+    )
+
+
+@app.get("/api/contracts/{contract_id}/results")
+async def get_contract_results(
+    contract_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    contract = (
+        await db.execute(select(Contract).where(Contract.id == contract_id))
+    ).scalar_one_or_none()
+    if contract is None:
+        return _results_error(
+            contract_id=str(contract_id),
+            detail="Contract not found.",
+            status_code=404,
+        )
+
+    rows = (
+        await db.execute(
+            select(ParsedClause, RiskScore)
+            .outerjoin(RiskScore, RiskScore.parsed_clause_id == ParsedClause.id)
+            .where(ParsedClause.contract_id == contract_id)
+            .order_by(ParsedClause.clause_index.asc())
+        )
+    ).all()
+
+    clauses: list[ClauseResult] = []
+    for parsed, risk in rows:
+        risk_factors = list(risk.risk_factors) if risk and risk.risk_factors is not None else None
+        clauses.append(
+            ClauseResult(
+                parsed_clause_id=parsed.id,
+                contract_id=parsed.contract_id,
+                clause_index=parsed.clause_index,
+                raw_text=parsed.raw_text,
+                clause_type=parsed.clause_type or "general",
+                clause_type_confidence=float(parsed.clause_type_confidence or 0.0),
+                plain_language_summary=risk.plain_language_summary if risk else None,
+                risk_factors=risk_factors,
+                dspy_risk_score=float(risk.risk_score) if risk else None,
+                risk_level=risk.risk_level if risk else None,
+            )
+        )
+
+    response = ContractResultsResponse(
+        status="success",
+        contract_id=contract.id,
+        filename=contract.original_filename,
+        clauses=clauses,
+        disclaimer=UPL_DISCLAIMER,
+    )
+    return response.model_dump(mode="json")

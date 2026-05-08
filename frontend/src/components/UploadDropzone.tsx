@@ -1,22 +1,20 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type {
-  ParsedClause,
-  UploadResponse,
-  UploadSuccessResponse,
-} from "@/types/contracts";
+import { useRouter } from "next/navigation";
+import type { UploadResponse } from "@/types/contracts";
 import { uploadContractFile } from "@/lib/api";
-import ClauseList from "@/components/ClauseList";
 
 type Phase = "idle" | "loading" | "success" | "error";
 
 export default function UploadDropzone() {
+  const router = useRouter();
   const [phase, setPhase] = useState<Phase>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [success, setSuccess] = useState<UploadSuccessResponse | null>(null);
 
   const fileInputAccept = useMemo(() => "application/pdf,.pdf", []);
+
+  const isBusy = phase === "loading" || phase === "success";
 
   async function onFileSelected(file: File | null) {
     if (!file) return;
@@ -29,23 +27,20 @@ export default function UploadDropzone() {
 
     if (!isPdfByType && !isPdfByName) {
       setErrorMessage("Invalid file type. Please upload a PDF.");
-      setSuccess(null);
       setPhase("error");
       return;
     }
 
     setErrorMessage(null);
-    setSuccess(null);
     setPhase("loading");
 
     const result: UploadResponse = await uploadContractFile(file);
 
     if (result.status === "success") {
-      setSuccess(result);
       setPhase("success");
+      router.push(`/results/${result.contract_id}`);
     } else {
       setErrorMessage(result.detail ?? "Upload failed.");
-      setSuccess(null);
       setPhase("error");
     }
   }
@@ -59,7 +54,7 @@ export default function UploadDropzone() {
         }}
         onDrop={(e) => {
           e.preventDefault();
-          if (phase === "loading") return;
+          if (isBusy) return;
           const dropped = e.dataTransfer.files?.[0] ?? null;
           void onFileSelected(dropped);
         }}
@@ -74,7 +69,7 @@ export default function UploadDropzone() {
             type="file"
             accept={fileInputAccept}
             className="hidden"
-            disabled={phase === "loading"}
+            disabled={isBusy}
             onChange={(e) => {
               const picked = e.target.files?.[0] ?? null;
               void onFileSelected(picked);
@@ -87,7 +82,11 @@ export default function UploadDropzone() {
             htmlFor="contract-file"
             className="inline-flex cursor-pointer items-center justify-center rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {phase === "loading" ? "Processing..." : "Choose PDF"}
+            {phase === "loading"
+              ? "Processing..."
+              : phase === "success"
+                ? "Redirecting..."
+                : "Choose PDF"}
           </label>
 
           {phase === "error" && (
@@ -97,14 +96,6 @@ export default function UploadDropzone() {
           )}
         </div>
       </div>
-
-      {phase === "success" && success && (
-        <ClauseList
-          filename={success.filename}
-          clauses={success.parsed_clauses as ParsedClause[]}
-        />
-      )}
     </div>
   );
 }
-

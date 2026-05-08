@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import sklearn, spacy, joblib, numpy, scipy; print\\('sklearn', sklearn.__version__\\); print\\('spacy', spacy.__version__\\); print\\('joblib', joblib.__version__\\); print\\('numpy', numpy.__version__\\); print\\('scipy', scipy.__version__\\)\")",
+      "PowerShell(npm run lint 2>&1 | Select-Object -Last 40; \"EXIT=$LASTEXITCODE\")"
+    ]
+  }
+}

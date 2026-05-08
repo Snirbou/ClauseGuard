@@ -114,10 +114,18 @@ def configure_lm(
         )
 
     elif provider == "ollama":
-        resolved_base_url = base_url or "http://localhost:11434"
+        # No API key required for local Ollama. Use the ollama_chat/ prefix so
+        # LiteLLM routes through the /api/chat endpoint, which matches how
+        # chat-tuned models (llama3, mistral, etc.) expect to be prompted.
+        resolved_base_url = (
+            base_url
+            or os.environ.get("OLLAMA_BASE_URL")
+            or "http://localhost:11434"
+        )
         lm = dspy.LM(
-            model=f"ollama/{model}",
+            model=f"ollama_chat/{model}",
             api_base=resolved_base_url,
+            api_key="",
         )
 
     else:
@@ -199,6 +207,7 @@ def process_clauses(
                 parsed_clause_id=clause.parsed_clause_id,
                 contract_id=clause.contract_id,
                 clause_type=clause.clause_type,
+                clause_type_confidence=clause.clause_type_confidence,
                 plain_language_summary=prediction.plain_language_summary.strip(),
                 risk_factors=factors,
                 dspy_risk_score=score,

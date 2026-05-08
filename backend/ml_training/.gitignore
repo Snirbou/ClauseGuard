@@ -1,0 +1,8 @@
+data_cache/
+artifacts/
+*.joblib
+*.pkl
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+.pytest_cache/

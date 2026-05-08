@@ -1,0 +1,159 @@
+🛑 PROTOCOL: IDE SNAPSHOT GENERATOR (GENERIC) 🛑
+
+You are the IDE developer inside the runtime/codebase environment (Cursor). You have:
+1) Full access to the repository via @Codebase.
+2) An attached Markdown file that contains the FULL Browser-session transcript: <SESSION_MD_PATH>.
+3) Existing snapshots under docs/snapshots/ (the latest one is the "previous snapshot" baseline).
+
+GOAL
+Create a new snapshot file in docs/snapshots/ that serves as a perfect knowledge bridge for the next developer session:
+- Not only what changed, but WHY.
+- Must preserve continuity with the previous snapshot.
+- Must be a Detailed Technical Report with bullets, emphasis, and concrete references to code locations.
+
+INPUTS
+- Session transcript (authoritative): <SESSION_MD_PATH>
+- Codebase context: @Codebase
+- Previous snapshot baseline: the most recent file in docs/snapshots/
+
+OUTPUT FILE
+- Path: docs/snapshots/snapshot_WITH_TODAYS_DATE.md
+- Inspect the docs/snapshots/ folder and replicate the exact naming convention already in use
+  (e.g., YYYY-MM-DD, DD-MM-YYYY, slug-based, etc.). Do NOT invent a new convention.
+- If docs/snapshots/ is empty, use: snapshot_YYYY-MM-DD.md (ISO date, system date).
+
+---
+
+MANDATORY WORKFLOW (DO NOT SKIP)
+
+STEP 1 — Read the session transcript (<SESSION_MD_PATH>) fully and extract:
+  - Decisions made, changes implemented, reasoning, and tradeoffs
+  - TODOs, blockers, open questions, and risks surfaced
+  - Any config values, env vars, or specific files discussed
+
+STEP 2 — Read the previous snapshot (latest file in docs/snapshots/) and treat it as baseline.
+  - If no previous snapshot exists, treat baseline as "project start" and note [FIRST SNAPSHOT].
+
+STEP 3 — Discover and scan the repository entry points and core modules via @Codebase:
+  a) Entry points: identify the primary runnable scripts/binaries (e.g., index.ts, main.py,
+     orchestrator.js, run_*.bat/sh, Makefile targets, Docker entrypoints).
+  b) Core modules: for each pipeline layer or domain boundary visible in the directory tree,
+     read the 1–3 most relevant files per layer. Cover:
+       - Data ingestion / scraping / API client layer
+       - Business logic / processing / transformation layer
+       - Output / emit / notification layer
+       - State / persistence layer (DB, JSON files, logs)
+       - Configuration layer (config files, .env usage — do NOT print secret values)
+       - Tooling / scripts (only if relevant to this session's transcript)
+  c) Ground every claim made in STEP 1 in actual code. If a transcript claim cannot be
+     verified in code, mark it: [TRANSCRIPT ONLY — NOT VERIFIED IN CODE].
+
+STEP 4 — Extract and confirm from code (not guesses) the CURRENT values of all
+  critical configuration parameters discussed or affected in this session.
+  For each parameter:
+    - Name / identifier
+    - Effective value or behavior (if derived from env/range, document the derivation)
+    - Source of truth: file + function/line context
+    - If env-driven: list env var name only — DO NOT reveal secret values.
+
+---
+
+STYLE REQUIREMENTS
+- Language: match the language convention of existing snapshots in docs/snapshots/.
+  If no convention exists, default to English.
+- Format: Detailed Technical Report.
+- Use:
+  - Bullet points throughout
+  - **Bold** for key facts, decisions, and changed values
+  - "Why" explanations — rationale and intent, not just "what happened"
+  - Concrete file/function references (e.g., `src/worker.ts → processQueue()`)
+- Avoid:
+  - Vague statements not backed by the session transcript or code scan
+  - Copying the transcript verbatim — synthesize and compress
+  - Speculative language: "probably", "likely", "I think"
+
+---
+
+SNAPSHOT STRUCTURE (MUST MATCH THIS ORDER)
+
+1) Title + Metadata
+   - Snapshot name, date, and scope (what this session covered)
+   - "Based on session transcript: <SESSION_MD_PATH>"
+   - "Baseline: <previous snapshot filename>" (or [FIRST SNAPSHOT])
+
+2) System Architecture View
+   - High-level data flow of the system as it currently exists in code
+     (not as described in old docs — ground in @Codebase scan from STEP 3)
+   - Identify and list all pipeline layers/components found
+   - Mention key state files and where they live, as currently in code
+
+3) Current Phase Status
+   - Infer the current development phase from the baseline snapshot + session transcript
+   - If phase naming is not explicit in either source, define "current phase" using
+     concrete milestones (what is working, what is in progress, what is not started)
+
+4) Core Achievements (Technical)
+   - What was implemented or changed during this session
+   - For each item, include all four of:
+     a) What changed
+     b) Why it was done (intent/rationale)
+     c) Where in code (file + function/section)
+     d) Impact and risk (performance, correctness, dependencies affected)
+
+5) Contextual Delta (vs Previous Snapshot)
+   - What changed since the baseline snapshot:
+     - New insights or understanding gained
+     - Behavior changes (runtime, logic, outputs)
+     - Refactors (structural changes with no behavior change)
+     - Config changes (values, env vars, thresholds)
+     - New tools, scripts, or dependencies added or updated
+   - Highlight any reversed decisions or newly discovered constraints
+
+6) Configuration Snapshot
+   - For every critical config parameter confirmed in STEP 4:
+     - Parameter name
+     - Current effective value or behavior
+     - Source of truth (file + function/line context)
+     - If env-driven: env var name only — no secret values
+   - Mark parameters that changed since the baseline snapshot with: 🔄 CHANGED
+
+7) Observability & Maintenance
+   - How to run each major flow identified in STEP 3 (exact commands or scripts)
+   - Log and output file locations and how to interpret them
+   - Relevant tools/scripts from this session and their purpose
+   - Known failure modes and how to diagnose them
+     (e.g., auth errors, rate limiting, state corruption, DB locks, network timeouts)
+
+8) Next Strategic Steps
+   - Prioritized action list derived from transcript TODOs + open questions:
+     - P0: Blockers — must resolve before next run
+     - P1: High-leverage — significant value, low risk
+     - P2: Cleanup — technical debt, refactor, polish
+   - For each P0 and P1 item: include explicit "Definition of Done" bullets
+   - Call out any decisions that must be made at the start of the next session
+
+---
+
+QUALITY GATE (BEFORE WRITING FILE)
+[ ] Continuity: explicitly connects baseline snapshot → today's snapshot.
+[ ] Traceability: every important claim is anchored to (a) a transcript excerpt
+    or (b) a code reference. Unverifiable claims are marked [TRANSCRIPT ONLY].
+[ ] Completeness: all 8 sections are present and filled — no section is empty
+    or contains only "[see transcript]".
+[ ] Naming convention: output filename matches the pattern already in docs/snapshots/.
+[ ] No secrets: env var values are never printed, only names.
+[ ] No speculation: no "probably", "likely", or "I think" in the document.
+[ ] Readable: headings, spacing, and bullets used consistently throughout.
+
+---
+
+DELIVERABLE
+Create the new file under docs/snapshots/ with the full report content.
+Output only:
+  1) The created filename/path
+  2) The full markdown content written to that file
+(No additional commentary.)
+
+---
+
+<SESSION_MD_PATH> = <REPLACE WITH ACTUAL PATH TO SESSION TRANSCRIPT>

@@ -32,6 +32,7 @@ _MOCK_CLAUSES_RAW: list[dict] = [
         "parsed_clause_id": uuid.UUID("11111111-0000-0000-0000-000000000001"),
         "contract_id": _CONTRACT_ID,
         "clause_type": "ip_assignment",
+        "clause_type_confidence": 0.92,
         "raw_text": (
             "All intellectual property, inventions, and work product created by "
             "the Contractor during the term of this Agreement, or as a result of "
@@ -46,6 +47,7 @@ _MOCK_CLAUSES_RAW: list[dict] = [
         "parsed_clause_id": uuid.UUID("22222222-0000-0000-0000-000000000002"),
         "contract_id": _CONTRACT_ID,
         "clause_type": "payment_terms",
+        "clause_type_confidence": 0.95,
         "raw_text": (
             "The Client shall pay the Contractor a fixed fee of USD 8,500 per month, "
             "payable within Net 30 days of receipt of a valid invoice. Late payments "
@@ -58,6 +60,7 @@ _MOCK_CLAUSES_RAW: list[dict] = [
         "parsed_clause_id": uuid.UUID("33333333-0000-0000-0000-000000000003"),
         "contract_id": _CONTRACT_ID,
         "clause_type": "termination",
+        "clause_type_confidence": 0.90,
         "raw_text": (
             "Either party may terminate this Agreement for convenience upon 30 days' "
             "written notice to the other party. The Client may terminate this Agreement "
@@ -72,6 +75,7 @@ _MOCK_CLAUSES_RAW: list[dict] = [
         "parsed_clause_id": uuid.UUID("44444444-0000-0000-0000-000000000004"),
         "contract_id": _CONTRACT_ID,
         "clause_type": "liability",
+        "clause_type_confidence": 0.88,
         "raw_text": (
             "In no event shall either party be liable to the other for any indirect, "
             "incidental, special, consequential, or punitive damages arising out of or "
@@ -87,6 +91,7 @@ _MOCK_CLAUSES_RAW: list[dict] = [
         "parsed_clause_id": uuid.UUID("55555555-0000-0000-0000-000000000005"),
         "contract_id": _CONTRACT_ID,
         "clause_type": "confidentiality",
+        "clause_type_confidence": 0.97,
         "raw_text": (
             "Each party ('Recipient') agrees to hold in strict confidence all "
             "Confidential Information disclosed by the other party ('Discloser') and "
@@ -101,6 +106,7 @@ _MOCK_CLAUSES_RAW: list[dict] = [
         "parsed_clause_id": uuid.UUID("66666666-0000-0000-0000-000000000006"),
         "contract_id": _CONTRACT_ID,
         "clause_type": "scope_of_work",
+        "clause_type_confidence": 0.91,
         "raw_text": (
             "The Contractor agrees to deliver the following services and deliverables: "
             "(1) Full-stack web application development per the statement of work "
@@ -114,6 +120,7 @@ _MOCK_CLAUSES_RAW: list[dict] = [
         "parsed_clause_id": uuid.UUID("77777777-0000-0000-0000-000000000007"),
         "contract_id": _CONTRACT_ID,
         "clause_type": "governing_law",
+        "clause_type_confidence": 0.98,
         "raw_text": (
             "This Agreement shall be governed by and construed in accordance with the "
             "laws of the State of Delaware, without regard to its conflict of law "
@@ -128,6 +135,7 @@ _MOCK_CLAUSES_RAW: list[dict] = [
         "parsed_clause_id": uuid.UUID("88888888-0000-0000-0000-000000000008"),
         "contract_id": _CONTRACT_ID,
         "clause_type": "general",
+        "clause_type_confidence": 0.55,
         "raw_text": (
             "This Agreement constitutes the entire agreement between the parties with "
             "respect to the subject matter hereof and supersedes all prior agreements, "
@@ -147,5 +155,5 @@ def get_mock_clauses() -> list[ClauseInput]:
     every branch of the DSPy pipeline.
     """
     return [
-        ClauseInput(**data) for data in _MOCK_CLAUSES_RAW[:1]
+        ClauseInput(**data) for data in _MOCK_CLAUSES_RAW
     ]

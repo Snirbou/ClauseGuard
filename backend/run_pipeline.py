@@ -78,7 +78,7 @@ def _print_summary(results: list[ClauseAnalysisResult]) -> None:
 # Pipeline Execution Core
 # ---------------------------------------------------------------------------
 
-def execute_pipeline(
+async def execute_pipeline(
     clauses: list[ClauseInput],
     provider: str,
     model: str,
@@ -97,12 +97,12 @@ def execute_pipeline(
     else:
         analyzer = load_optimized_analyzer()
 
-    # 2. Processing Phase
+    # 2. Processing Phase (DSPy is sync — runs inline; brief block is fine for a CLI)
     logger.info("Processing %d clauses...", len(clauses))
     stats = RunStats(total=len(clauses))
-    
+
     results = process_clauses(clauses, analyzer=analyzer)
-    
+
     for r in results:
         stats.record_success()
 
@@ -115,7 +115,7 @@ def execute_pipeline(
     # 3. Persistence Phase
     if should_save:
         logger.info("Saving results to database...")
-        saved_count = asyncio.run(save_results_to_db(results))
+        saved_count = await save_results_to_db(results)
         logger.info("Save complete. DB updated with %d records.", saved_count)
     else:
         logger.info("Skipping database save (use --save to persist).")
@@ -125,10 +125,10 @@ def execute_pipeline(
 # Modes
 # ---------------------------------------------------------------------------
 
-def run_mock(args: argparse.Namespace) -> None:
+async def _run_mock_async(args: argparse.Namespace) -> None:
     logger.info("Mode: MOCK DATA (no database required)")
     clauses = get_mock_clauses()
-    execute_pipeline(
+    await execute_pipeline(
         clauses=clauses,
         provider=args.provider,
         model=args.model,
@@ -136,6 +136,10 @@ def run_mock(args: argparse.Namespace) -> None:
         optimize_bfs=args.optimize,
         optimize_mipro=args.optimize_mipro,
     )
+
+
+def run_mock(args: argparse.Namespace) -> None:
+    asyncio.run(_run_mock_async(args))
 
 
 async def _fetch_clauses_from_db(contract_id: UUID | None) -> list[ClauseInput]:
@@ -163,19 +167,20 @@ async def _fetch_clauses_from_db(contract_id: UUID | None) -> list[ClauseInput]:
             contract_id=row.contract_id,
             raw_text=row.raw_text,
             clause_type=row.clause_type or "general",
+            clause_type_confidence=float(row.clause_type_confidence or 0.0),
         )
         for row in rows
     ]
 
 
-def run_db(args: argparse.Namespace) -> None:
+async def _run_db_async(args: argparse.Namespace) -> None:
     scope = f"contract_id={args.contract_id}" if args.contract_id else "ALL contracts"
     logger.info("Mode: LIVE DATABASE — scope: %s", scope)
-    
-    clauses = asyncio.run(_fetch_clauses_from_db(args.contract_id))
+
+    clauses = await _fetch_clauses_from_db(args.contract_id)
     logger.info("Fetched %d clauses from DB.", len(clauses))
 
-    execute_pipeline(
+    await execute_pipeline(
         clauses=clauses,
         provider=args.provider,
         model=args.model,
@@ -183,6 +188,14 @@ def run_db(args: argparse.Namespace) -> None:
         optimize_bfs=args.optimize,
         optimize_mipro=args.optimize_mipro,
     )
+
+
+def run_db(args: argparse.Namespace) -> None:
+    # Single asyncio.run() so the SQLAlchemy/asyncpg engine pool stays bound
+    # to one event loop. Running fetch and save in separate asyncio.run() calls
+    # caused "another operation is in progress" because pooled asyncpg
+    # connections were tied to the first (now-closed) loop.
+    asyncio.run(_run_db_async(args))
 
 
 # ---------------------------------------------------------------------------
@@ -207,14 +220,24 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--optimize-mipro", action="store_true", help="Run MIPROv2 optimizer (slower, better).")
 
     parser.add_argument("--provider", default="openai", choices=["openai", "ollama"], help="LLM provider.")
-    parser.add_argument("--model", default="gpt-4o-mini", help="Model name.")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Model name. Defaults: 'gpt-4o-mini' for openai, 'llama3' for ollama.",
+    )
 
     return parser
+
+
+_PROVIDER_DEFAULT_MODEL = {"openai": "gpt-4o-mini", "ollama": "llama3"}
 
 
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
+
+    if args.model is None:
+        args.model = _PROVIDER_DEFAULT_MODEL[args.provider]
 
     if args.mock:
         run_mock(args)
