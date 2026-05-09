@@ -52,3 +52,11 @@ export type ContractResultsError = {
 };
 
 export type ContractResultsResponse = ContractResultsSuccess | ContractResultsError;
+
+/** Saved contracts row for dashboard list (GET /api/contracts). */
+export type UserContractSummary = {
+  contract_id: string;
+  filename: string;
+  created_at: string;
+  clause_count: number;
+};
