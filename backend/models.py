@@ -1,8 +1,14 @@
-"""SQLAlchemy ORM models for ClauseGuard Step 1.
+"""SQLAlchemy ORM models for ClauseGuard.
 
 Tables:
     contracts       — uploaded contract metadata (no user_id yet; Step 3).
     parsed_clauses  — individual clauses extracted from a contract.
+    risk_scores     — DSPy analysis output, one row per parsed clause.
+
+Schema rule: columns and tables here are additive only.  Existing columns are
+never renamed or removed.  Indexes added below are also applied to already
+existing databases by ``ensure_indexes()`` in ``database.py`` — SQLAlchemy's
+``create_all`` only builds indexes for tables it creates from scratch.
 """
 
 from __future__ import annotations
@@ -38,6 +44,7 @@ class Contract(Base):
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,
+        index=True,                       # list view orders by created_at DESC
         default=lambda: datetime.now(timezone.utc),
     )
 
@@ -61,6 +68,7 @@ class ParsedClause(Base):
         UUID(as_uuid=True),
         ForeignKey("contracts.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,                       # every read path filters on this
     )
     clause_index = Column(Integer, nullable=False)
     raw_text = Column(Text, nullable=False)

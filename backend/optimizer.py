@@ -156,7 +156,8 @@ def run_miprov2() -> dspy.Module:
     optimized_analyzer = teleprompter.compile(
         analyzer,
         trainset=TRAIN_DATA,
-        num_batches=2,
+        # `num_batches` was removed from MIPROv2.compile() in DSPy 3.x and
+        # passing it raised TypeError before the optimizer could run.
         max_bootstrapped_demos=3,
         max_labeled_demos=5,
         requires_permission_to_run=False,

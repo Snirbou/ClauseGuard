@@ -1,17 +1,30 @@
+# Verified working set as of 2026-08-19 on Python 3.13 / Windows 11.
+# Lower bounds rather than exact pins, except where a floor is load-bearing.
+
 # Web framework & server
-fastapi
-uvicorn
-python-multipart
+fastapi>=0.135.1
+uvicorn>=0.42.0
+python-multipart>=0.0.22
 
 # PDF parsing
-PyMuPDF
+PyMuPDF>=1.27.2
 
 # Database (Developer 1)
-sqlalchemy[asyncio]
-asyncpg
-pydantic-settings
-python-dotenv
+sqlalchemy[asyncio]>=2.0.52
+asyncpg>=0.31.0
+greenlet>=3.5.5            # required by sqlalchemy[asyncio] on 3.13
+pydantic-settings>=2.15.0
+python-dotenv>=1.2.2
+
+# Used directly to offload blocking work (PyMuPDF, DSPy) off the event loop.
+anyio>=4.12.1
 
 # DSPy pipeline (Developer 2)
-dspy-ai
-openai
+dspy-ai>=3.3.0
+openai>=2.33.0
+
+# Floor matters on Windows: litellm < 1.97 ships a deeply nested guardrail
+# benchmark tree whose paths exceed MAX_PATH (260 chars), and pip aborts the
+# whole install with "OSError: [Errno 2] No such file or directory" unless
+# long-path support is enabled. 1.97+ ships a compiled wheel without them.
+litellm>=1.97.0
