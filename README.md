@@ -115,6 +115,19 @@ cd frontend && npm install && npm run dev
 Open <http://localhost:3000>. Set `NEXT_PUBLIC_API_BASE_URL` if the backend is
 not on `http://localhost:8000`.
 
+### 5. Verify it works
+
+With the backend running:
+
+```bash
+cd backend && python smoke_test.py
+```
+
+This walks the whole path — upload → list → detail → analyze → detail →
+delete — asserting the response shape at each step, and exits non-zero on the
+first failure. The analysis step is skipped automatically when no
+`OPENAI_API_KEY` is configured, so it is still useful without one.
+
 ### Windows install note
 
 `pip install -r requirements.txt` can fail with
@@ -261,6 +274,7 @@ awaited — synchronous access was removed. See
 | `optimizer.py` | BootstrapFewShot / MIPROv2 optimization workflows |
 | `db_writer.py` | Upsert into `risk_scores` |
 | `run_pipeline.py` | CLI runner (still useful for offline/mock runs) |
+| `smoke_test.py` | End-to-end API check against a running backend |
 | `mock_data.py` | Sample clauses for offline DSPy testing |
 | `logger.py` | Structured logging under `clauseguard.*` |
 
