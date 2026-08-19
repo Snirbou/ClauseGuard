@@ -1,0 +1,145 @@
+"""Pydantic response models for the ClauseGuard HTTP API.
+
+Kept separate from ``schemas.py`` (which models the DSPy pipeline's internal
+input/output) so that the wire format can evolve without disturbing the
+pipeline contract.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+
+# ---------------------------------------------------------------------------
+# Shared pieces
+# ---------------------------------------------------------------------------
+
+class RiskDistribution(BaseModel):
+    """How the clauses of a contract are spread across risk levels."""
+
+    high: int = 0
+    medium: int = 0
+    low: int = 0
+    unanalyzed: int = 0
+
+
+class ClauseDetail(BaseModel):
+    """A parsed clause plus its risk analysis, when one exists.
+
+    Every risk field is optional: a clause that has not been through the DSPy
+    pipeline yet has a ``parsed_clauses`` row but no ``risk_scores`` row.
+    """
+
+    parsed_clause_id: UUID
+    contract_id: UUID
+    clause_index: int
+    raw_text: str
+    clause_type: str | None = None
+    clause_type_confidence: float | None = None
+
+    # --- populated from risk_scores (LEFT JOIN) ---
+    risk_level: str | None = None
+    risk_score: float | None = None
+    risk_percentile: int | None = None
+    risk_factors: list[str] = Field(default_factory=list)
+    plain_language_summary: str | None = None
+    dspy_program_version: str | None = None
+    analyzed_at: datetime | None = None
+
+    @property
+    def has_analysis(self) -> bool:
+        return self.risk_level is not None
+
+
+# ---------------------------------------------------------------------------
+# GET /api/contracts
+# ---------------------------------------------------------------------------
+
+class ContractSummary(BaseModel):
+    """One row of the contracts list view."""
+
+    id: UUID
+    original_filename: str
+    created_at: datetime
+    clause_count: int
+    analyzed_clause_count: int
+    has_analysis: bool
+
+
+class ContractListResponse(BaseModel):
+    status: Literal["success"] = "success"
+    count: int
+    contracts: list[ContractSummary]
+
+
+# ---------------------------------------------------------------------------
+# GET /api/contracts/{id}
+# ---------------------------------------------------------------------------
+
+class ContractDetailResponse(BaseModel):
+    status: Literal["success"] = "success"
+    id: UUID
+    original_filename: str
+    created_at: datetime
+    clause_count: int
+    analyzed_clause_count: int
+    has_analysis: bool
+    risk_distribution: RiskDistribution
+    clauses: list[ClauseDetail]
+
+
+# ---------------------------------------------------------------------------
+# POST /api/contracts/{id}/analyze
+# ---------------------------------------------------------------------------
+
+class AnalyzedClause(BaseModel):
+    """A single clause's DSPy output, echoed back from the analyze endpoint."""
+
+    parsed_clause_id: UUID
+    contract_id: UUID
+    clause_type: str
+    plain_language_summary: str
+    risk_factors: list[str]
+    risk_score: float
+    risk_level: str
+
+
+class AnalyzeResponse(BaseModel):
+    status: Literal["success"] = "success"
+    contract_id: UUID
+    clause_count: int          # clauses submitted to the pipeline
+    analyzed_count: int        # clauses the LLM returned a result for
+    saved_count: int           # rows written to risk_scores
+    failed_count: int          # submitted but no usable result
+    provider: str
+    model: str
+    risk_distribution: RiskDistribution
+    results: list[AnalyzedClause]
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/contracts/{id}
+# ---------------------------------------------------------------------------
+
+class DeleteResponse(BaseModel):
+    status: Literal["success"] = "success"
+    contract_id: UUID
+    deleted: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
+
+class HealthResponse(BaseModel):
+    status: str
+    database: str
+    llm_configured: bool
+    provider: str
+    model: str
+    auto_analyze_on_upload: bool
+    max_upload_mb: float
