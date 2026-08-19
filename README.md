@@ -1,163 +1,303 @@
-# ClauseGuard - AI-Powered Contract Clause Analyzer
+# ClauseGuard — AI-Powered Contract Clause Analyzer
 
-## Overview
-ClauseGuard is an AI-powered platform for analyzing contracts and extracting meaningful clause-level text segments from uploaded PDF documents.
+ClauseGuard reads freelance service agreements clause by clause, explains each
+one in plain English, and flags the terms most likely to hurt the freelancer
+signing them.
 
-## Current Status
-**Phase 0 (Walking Skeleton) Complete - Baseline established. No DB, Auth, or AI yet.**
+> **This tool provides educational, pattern-based analysis only. It is NOT legal
+> advice. Always consult a qualified attorney.**
 
-This phase focuses on a bare-minimum end-to-end pipeline:
-1. Next.js UI uploads a PDF via `multipart/form-data`.
-2. FastAPI backend extracts text from the PDF (PyMuPDF).
-3. The text is segmented into “clauses” using a naive heuristic.
-4. The backend returns JSON to the frontend for rendering.
+---
 
-## Architecture Map
-Repository layout:
+## Current status
 
-- `frontend/` (Next.js, App Router, Tailwind)
-  - Upload UI (drag-and-drop + file picker)
-  - Calls the backend upload endpoint
-  - Renders `parsed_clauses`
-- `backend/` (FastAPI)
-  - Implements `POST /api/contracts/upload`
-  - Validates PDF upload
-  - Extracts PDF text with PyMuPDF
-  - Segments text into clauses (currently naive heuristic)
-  - Returns JSON with a strict contract schema (see below)
+The upload pipeline and the AI analysis pipeline are **connected end to end**.
+A contract can be uploaded, segmented, classified, analyzed and read entirely
+from the web UI — no CLI step required.
 
-## Strict API Contract (Must Preserve)
-Endpoint:
-`POST /api/contracts/upload`
+| Capability | Status |
+|---|---|
+| PDF upload, text extraction, clause segmentation | ✅ |
+| Rule-based clause classification (7 types + fallback) | ✅ *(mock — placeholder for a real ML model)* |
+| Persistence to PostgreSQL (contracts / parsed_clauses / risk_scores) | ✅ |
+| DSPy + OpenAI risk analysis triggered from the API | ✅ |
+| Contract list / detail / delete endpoints | ✅ |
+| Full Next.js frontend (landing, upload, list, analysis) | ✅ |
+| UPL disclaimer + "Consult a Lawyer" CTA | ✅ |
+| Optional auto-analysis on upload | ✅ *(off by default)* |
+| Authentication / multi-user | ❌ not started |
+| Background job queue for analysis | ❌ analysis runs synchronously |
+| OCR for scanned PDFs | ❌ text-layer PDFs only |
+| Hebrew / RTL UI | ❌ English-first for now |
 
-### Request
-`Content-Type: multipart/form-data`
+---
 
-- `file`: PDF binary (field name is exactly `file`)
+## Architecture
 
-### Response (Success)
-`200 OK`
+```
+      Browser (Next.js 16 / React 19 / Tailwind 4)
+        │
+        │  POST /api/contracts/upload        (multipart PDF)
+        │  GET  /api/contracts               (list)
+        │  GET  /api/contracts/{id}          (detail + risk join)
+        │  POST /api/contracts/{id}/analyze  (run the AI pipeline)
+        │  DELETE /api/contracts/{id}
+        ▼
+      FastAPI (backend/main.py)
+        │
+        ├─ PyMuPDF ──► text extraction ──► clause segmentation
+        │                                       │
+        │                                       ▼
+        │                              classifier.mock_classify()
+        │                                       │
+        │                                       ▼
+        │                          contracts + parsed_clauses  ──┐
+        │                                                        │
+        └─ analysis_service.analyze_contract()                    │  PostgreSQL 16
+              │                                                   │
+              ├─ dspy_pipeline.configure_lm()   (once per process) │
+              ├─ dspy_pipeline.process_clauses() ──► OpenAI        │
+              └─ db_writer.save_results_to_db() ──► risk_scores ───┘
+```
+
+`analysis_service.py` is the bridge that was previously missing — before it,
+a developer had to run `run_pipeline.py --db --save` by hand.
+
+### Clause segmentation
+
+Clauses are split on blank lines. PyMuPDF frequently extracts contracts with
+**no** blank lines (one line per visual line), which would collapse the whole
+document into a single clause, so there is a fallback that splits on numbered
+clause headings (`1. SCOPE`, `ARTICLE 5`, `2.1) Payment`). The fallback only
+engages when blank-line splitting finds no boundaries.
+
+This is still a heuristic. Replacing it with a real NLP segmenter is the
+highest-value next step for analysis quality.
+
+---
+
+## Running locally
+
+### 1. Start PostgreSQL
+
+```bash
+docker compose up -d
+```
+
+The backend still starts if Postgres is unreachable — it logs the failure and
+`GET /api/health` reports `"database": "unavailable"`, so the UI shows a clear
+message instead of an opaque connection error.
+
+### 2. Configure the backend
+
+```bash
+cp backend/.env.example backend/.env
+```
+
+Then edit `backend/.env` and set a real `OPENAI_API_KEY`. Without one,
+everything except `POST /api/contracts/{id}/analyze` works normally; that
+endpoint returns `503` with an explanatory message.
+
+### 3. Start the backend
+
+```bash
+cd backend && pip install -r requirements.txt && uvicorn main:app --reload --port 8000
+```
+
+Interactive API docs: <http://127.0.0.1:8000/docs>
+
+### 4. Start the frontend
+
+```bash
+cd frontend && npm install && npm run dev
+```
+
+Open <http://localhost:3000>. Set `NEXT_PUBLIC_API_BASE_URL` if the backend is
+not on `http://localhost:8000`.
+
+### Windows install note
+
+`pip install -r requirements.txt` can fail with
+`OSError: [Errno 2] No such file or directory` while unpacking `litellm`. This
+is the 260-character `MAX_PATH` limit, not a broken package. `requirements.txt`
+pins `litellm>=1.97.0`, which ships a compiled wheel without the offending
+deep paths. If you still hit it, map the backend to a short drive letter and
+install through that:
+
+```bash
+subst Q: C:\path\to\ClauseGuard\backend
+```
+
+---
+
+## Configuration (`backend/.env`)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DATABASE_URL` | `postgresql+asyncpg://clauseguard:clauseguard@localhost:5432/clauseguard` | Async Postgres DSN |
+| `OPENAI_API_KEY` | *(none)* | Required for AI analysis; placeholder values are detected and treated as unset |
+| `DSPY_PROVIDER` | `openai` | `openai` or `ollama` |
+| `DSPY_MODEL` | `gpt-4o-mini` | Model name |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Used when provider is `ollama` |
+| `MAX_UPLOAD_BYTES` | `10485760` (10 MB) | Enforced in the browser and on the server |
+| `AUTO_ANALYZE_ON_UPLOAD` | `false` | Run analysis inline after upload |
+| `CORS_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Comma-separated allowed origins |
+
+`AUTO_ANALYZE_ON_UPLOAD` is off by default because it bills the LLM on every
+upload and blocks the upload request until analysis finishes. When enabled, a
+failed analysis never fails the upload — the response carries an
+`analysis: { status: "skipped", detail: ... }` field.
+
+---
+
+## API
+
+### `POST /api/contracts/upload`
+
+`multipart/form-data` with a `file` field containing a PDF.
+
+**Success (200)** — this envelope is a stable contract; fields are only ever added:
 
 ```json
 {
   "status": "success",
   "filename": "msa.pdf",
+  "contract_id": "1b9d...",
   "parsed_clauses": [
     {
+      "parsed_clause_id": "7c2a...",
+      "contract_id": "1b9d...",
       "clause_index": 1,
-      "raw_text": "This Agreement starts on the Effective Date..."
-    },
-    {
-      "clause_index": 2,
-      "raw_text": "Either party may terminate with 30 days notice..."
+      "raw_text": "1. SCOPE OF WORK. ...",
+      "clause_type": "scope_of_work",
+      "clause_type_confidence": 0.8
     }
   ]
 }
 ```
 
-### Response (Error)
-`400 Bad Request` (and other non-2xx cases as applicable)
-
-Error envelope (structure is intentionally consistent):
+**Error** — same envelope shape, always with an empty `parsed_clauses`:
 
 ```json
 {
   "status": "error",
   "filename": "msa.pdf",
+  "contract_id": null,
   "parsed_clauses": [],
-  "detail": "Invalid file type. PDF required."
+  "detail": "File is too large. Maximum size is 10 MB."
 }
 ```
 
-### Schema Rules (For Developer 2)
-- `status`: `"success" | "error"`
-- `filename`: string (echo of the uploaded filename)
-- `parsed_clauses`:
-  - must always exist
-  - for `"success"`: array of objects
-  - for `"error"`: must be an empty array `[]`
-- `parsed_clauses[]` object:
-  - `clause_index`: integer, **1-based**, monotonic increasing
-  - `raw_text`: string clause text as produced by the segmentation/classification pipeline
-- `detail`:
-  - present for errors
-  - can be a human-readable message
+Status codes: `400` invalid type / unreadable / no extractable text,
+`413` over the size limit, `500` database write failure.
 
-## Run Instructions (Local)
-### 1. Start FastAPI backend
+### `GET /api/contracts`
 
-From the repo root:
+Every contract with `clause_count`, `analyzed_clause_count` and `has_analysis`.
+`has_analysis` is derived from a join against `risk_scores` rather than a status
+column, so no migration is needed.
 
-```powershell
-cd backend
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+### `GET /api/contracts/{id}`
+
+Contract metadata, a `risk_distribution` summary, and every clause LEFT JOINed
+with its risk score. Risk fields are `null` for clauses that have not been
+analyzed.
+
+### `POST /api/contracts/{id}/analyze`
+
+Runs the DSPy pipeline over every clause and upserts into `risk_scores`.
+**Synchronous** — the response is sent only after analysis is persisted, which
+takes roughly one LLM round-trip per clause. Moving this to a background worker
+is a known future improvement.
+
+Status codes: `404` unknown contract, `400` contract has no clauses,
+`409` an analysis is already running for this contract, `503` no LLM
+configured, `502` every clause failed (usually a bad key or no credit).
+
+### `DELETE /api/contracts/{id}`
+
+Deletes the contract; `parsed_clauses` and `risk_scores` cascade in Postgres.
+
+### `GET /api/health`
+
+Reports database reachability, whether an LLM is configured, and the active
+upload limit.
+
+Errors on all non-upload endpoints use `{"status": "error", "detail": "..."}`.
+
+---
+
+## Frontend
+
+| Route | Purpose |
+|---|---|
+| `/` | Landing page — what ClauseGuard does and what it is not |
+| `/upload` | Drag-and-drop upload, client-side type/size validation, clause-type badges on the result |
+| `/contracts` | All uploaded contracts with analysis status; delete with confirmation |
+| `/contracts/[id]` | **The main screen.** Risk distribution, Analyze button, per-clause cards with type badge, collapsible text, risk level, plain-language summary, risk factors, and a "Consult a Lawyer" CTA on high-risk clauses |
+
+Dark mode follows the OS setting, and the layout is responsive. The UPL
+disclaimer renders in the root layout on every page and cannot be dismissed.
+
+**Next.js 16 note:** `params` in dynamic routes is a `Promise` and must be
+awaited — synchronous access was removed. See
+`frontend/node_modules/next/dist/docs/01-app/02-guides/upgrading/version-16.md`.
+
+---
+
+## Backend module map
+
+| File | Responsibility |
+|---|---|
+| `main.py` | FastAPI app, all HTTP endpoints, error handlers, PDF extraction and segmentation |
+| `analysis_service.py` | Bridge: DB clauses → DSPy pipeline → `risk_scores` |
+| `api_schemas.py` | Pydantic response models for the HTTP API |
+| `schemas.py` | Pydantic models for the DSPy pipeline's own input/output |
+| `models.py` | SQLAlchemy ORM (`contracts`, `parsed_clauses`, `risk_scores`) |
+| `database.py` | Async engine, session factory, `init_db()` |
+| `config.py` | Settings from `backend/.env` |
+| `classifier.py` | Rule-based mock clause classifier (intentional placeholder) |
+| `dspy_pipeline.py` | DSPy signature, module, LM configuration, batch processing |
+| `optimizer.py` | BootstrapFewShot / MIPROv2 optimization workflows |
+| `db_writer.py` | Upsert into `risk_scores` |
+| `run_pipeline.py` | CLI runner (still useful for offline/mock runs) |
+| `mock_data.py` | Sample clauses for offline DSPy testing |
+| `logger.py` | Structured logging under `clauseguard.*` |
+
+### CLI (still supported)
+
+```bash
+python run_pipeline.py --mock                      # offline, no DB
+python run_pipeline.py --db --contract-id <UUID> --save
+python run_pipeline.py --mock --optimize           # BootstrapFewShot
 ```
 
-Backend listens on:
-- `http://127.0.0.1:8000`
+---
 
-### 2. Start Next.js frontend
+## Implementation notes worth knowing
 
-Open another terminal from the repo root:
+**`dspy.configure()` is single-owner.** DSPy only lets the thread that first
+called `dspy.configure()` call it again. Calling `configure_lm()` per request
+from FastAPI's rotating threadpool raises
+`RuntimeError: dspy.settings can only be changed by the thread that initially
+configured it` on the second request. `analysis_service._ensure_lm_configured()`
+therefore calls it exactly once per process.
 
-```powershell
-cd frontend
-npm install
-npm run dev
-```
+**The pipeline runs off the event loop.** `process_clauses()` is synchronous and
+network-bound; it is dispatched with `anyio.to_thread.run_sync` so it does not
+stall every other request. PDF parsing is offloaded the same way.
 
-Frontend listens on:
-- `http://localhost:3000`
+**Empty results mean total failure.** `process_clauses()` logs and skips clauses
+that raise, so an empty result list from a non-empty input means every call
+failed. That is surfaced as `502` rather than a misleading "0 clauses analyzed".
 
-### 3. Connecting frontend to backend (API base URL)
-By default, the frontend expects the backend at `http://localhost:8000`.
+**Schema changes are additive only.** Existing columns are never renamed or
+removed. `Base.metadata.create_all` does not add indexes to tables that already
+exist, so `database.init_db()` also issues `CREATE INDEX IF NOT EXISTS`.
 
-Optional:
-Set `NEXT_PUBLIC_API_BASE_URL` before running the frontend if your backend is elsewhere.
+---
 
-## Developer 2 Orientation (Crucial)
-Your immediate job is to upgrade the backend from a naive clause segmentation heuristic to a real NLP pipeline (spaCy + Clause Classification with scikit-learn), **without breaking the strict API response structure** documented above.
+## Project documents
 
-### What to change
-Go to:
-`backend/main.py`
-
-Locate the naive segmentation step that currently splits extracted text using a blank-line heuristic:
-
-- `re.split(r"\n\s*\n", full_text)`
-
-### What to replace it with
-Replace that logic with:
-1. Proper text preprocessing + segmentation using **spaCy** (or a spaCy-based strategy).
-2. Clause classification using **scikit-learn** (or an sklearn-based strategy).
-3. Output a list of clause texts, preserving the same “clause ordering” behavior (your system can re-order, but you must still return `clause_index` as a monotonic 1-based sequence).
-
-### What must NOT change
-Despite any internal refactor, the `POST /api/contracts/upload` endpoint must continue to return **exactly** the same top-level envelope and schema:
-- `status`
-- `filename`
-- `parsed_clauses[] { clause_index, raw_text }`
-- error envelope must keep: `status`, `filename`, `parsed_clauses: []`, and `detail`.
-
-### Output stability checklist
-When you implement the NLP/classification pipeline:
-- Always return `parsed_clauses` (never omit it).
-- Always keep `clause_index` 1-based and monotonic.
-- Always keep `raw_text` as a string.
-- Never add new required top-level keys to the success/error envelope.
-
-## Manual Smoke Test (Suggested)
-After both servers are running:
-
-### Backend-only (example with curl)
-```powershell
-curl -X POST http://127.0.0.1:8000/api/contracts/upload `
-  -F "file=@C:/path/to/your/contract.pdf"
-```
-
-### Frontend
-- Open `http://localhost:3000`
-- Upload a PDF
-- Confirm `parsed_clauses` render in the UI
-
+`PRD/` contains the product requirements, data model, acceptance criteria, user
+stories and glossary. Only 3 of the 9 planned tables are implemented.
