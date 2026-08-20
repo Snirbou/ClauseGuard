@@ -22,12 +22,7 @@ export type ParsedClause = {
 
 /** Present on upload responses only when AUTO_ANALYZE_ON_UPLOAD is enabled. */
 export type UploadAnalysisInfo =
-  | {
-      status: "success";
-      analyzed_count: number;
-      saved_count: number;
-      failed_count: number;
-    }
+  | { status: "started"; run_id: string }
   | { status: "skipped"; detail: string };
 
 export type UploadSuccessResponse = {
@@ -94,30 +89,43 @@ export type ContractDetail = {
   analyzed_clause_count: number;
   has_analysis: boolean;
   risk_distribution: RiskDistribution;
+  /** Most recent analysis run — lets the UI resume polling after a refresh. */
+  latest_run: AnalysisRun | null;
   clauses: ClauseDetail[];
 };
 
-export type AnalyzedClause = {
-  parsed_clause_id: string;
+export type AnalysisRunStatus = "pending" | "running" | "completed" | "failed";
+
+/** One execution of the analysis pipeline. The shape the UI polls. */
+export type AnalysisRun = {
+  id: string;
   contract_id: string;
-  clause_type: string;
-  plain_language_summary: string;
-  risk_factors: string[];
-  risk_score: number;
-  risk_level: RiskLevel;
+  status: AnalysisRunStatus;
+  started_at: string;
+  completed_at: string | null;
+  processing_time_ms: number | null;
+  clause_count: number | null;
+  completed_clauses: number;
+  error_message: string | null;
+  run_metadata: {
+    provider?: string;
+    model?: string;
+    dspy_version?: string;
+    cached_clauses?: number;
+    analyzed_clauses?: number;
+    failed_parsed_clause_ids?: string[];
+  } | null;
 };
 
-export type AnalyzeResponse = {
+/** 202 body from POST /api/contracts/{id}/analyze. */
+export type AnalyzeAcceptedResponse = {
+  status: "accepted";
+  run: AnalysisRun;
+};
+
+export type AnalysisRunResponse = {
   status: "success";
-  contract_id: string;
-  clause_count: number;
-  analyzed_count: number;
-  saved_count: number;
-  failed_count: number;
-  provider: string;
-  model: string;
-  risk_distribution: RiskDistribution;
-  results: AnalyzedClause[];
+  run: AnalysisRun;
 };
 
 export type DeleteResponse = {

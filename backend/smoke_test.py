@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from typing import Any
 
 import fitz
@@ -170,7 +171,7 @@ def main() -> None:
     )
 
     # --- analyze ----------------------------------------------------------
-    print("\n[6] POST /api/contracts/{id}/analyze")
+    print("\n[6] POST /api/contracts/{id}/analyze (asynchronous run)")
     res = client.post(f"/api/contracts/{contract_id}/analyze")
 
     if not llm_ready:
@@ -179,18 +180,38 @@ def main() -> None:
             res.status_code == 503,
             f"got {res.status_code}: {res.text[:200]}",
         )
-        print("        Skipping analysis assertions — set a real OPENAI_API_KEY to")
-        print("        exercise the DSPy pipeline end to end.")
+        print("        Skipping analysis assertions — set a real OPENAI_API_KEY (or")
+        print("        DSPY_PROVIDER=fake) to exercise the pipeline end to end.")
     else:
-        check("responds 200", res.status_code == 200, res.text[:400])
-        analysis = res.json()
+        check("responds 202", res.status_code == 202, res.text[:400])
+        run = res.json()["run"]
+        run_id = run["id"]
+        check("run is scheduled", run["status"] in ("pending", "running"), run["status"])
+
+        # A second analyze while one is active must be refused.
+        res = client.post(f"/api/contracts/{contract_id}/analyze")
+        check("concurrent analyze responds 409", res.status_code == 409, res.text[:200])
+
+        # Poll the run to completion — this is exactly what the frontend does.
+        deadline = time.time() + 180
+        status = run["status"]
+        while time.time() < deadline and status in ("pending", "running"):
+            time.sleep(0.5)
+            res = client.get(f"/api/analysis-runs/{run_id}")
+            check("run poll responds 200", res.status_code == 200, res.text[:200])
+            run = res.json()["run"]
+            status = run["status"]
+        check("run completed", status == "completed", f"status={status}, err={run.get('error_message')}")
         check(
-            "every clause analyzed",
-            analysis["analyzed_count"] == len(clauses),
-            f"{analysis['analyzed_count']}/{len(clauses)}, failed={analysis['failed_count']}",
+            "progress reached every clause",
+            run["completed_clauses"] == len(clauses),
+            f"{run['completed_clauses']}/{len(clauses)}",
         )
-        check("results persisted", analysis["saved_count"] == analysis["analyzed_count"])
-        print(f"        distribution={analysis['risk_distribution']}")
+        check("processing time recorded", isinstance(run["processing_time_ms"], int))
+        print(
+            f"        run completed in {run['processing_time_ms']}ms — "
+            f"metadata={run.get('run_metadata')}"
+        )
 
         print("\n[7] GET /api/contracts/{id} (after analysis)")
         res = client.get(f"/api/contracts/{contract_id}")
@@ -213,15 +234,32 @@ def main() -> None:
             "distribution buckets sum to the clause count",
             sum(detail["risk_distribution"].values()) == len(clauses),
         )
+        check(
+            "latest_run is reported on the detail view",
+            detail.get("latest_run", {}).get("id") == run_id,
+        )
         for clause in detail["clauses"]:
             print(
                 f"          #{clause['clause_index']:<2} {clause['risk_level']:<7} "
                 f"{clause['risk_score']:<5} {clause['plain_language_summary'][:52]}..."
             )
 
-        print("\n[8] POST analyze again (idempotent upsert)")
-        res = client.post(f"/api/contracts/{contract_id}/analyze")
-        check("responds 200", res.status_code == 200, res.text[:200])
+        print("\n[8] POST analyze again (content-hash cache, wait=true)")
+        res = client.post(f"/api/contracts/{contract_id}/analyze?wait=true")
+        check("responds 202", res.status_code == 202, res.text[:200])
+        rerun = res.json()["run"]
+        check("cached re-run completed synchronously", rerun["status"] == "completed", rerun["status"])
+        meta = rerun.get("run_metadata") or {}
+        check(
+            "every clause served from cache",
+            meta.get("cached_clauses") == len(clauses),
+            f"metadata={meta}",
+        )
+        check(
+            "no clause re-billed",
+            meta.get("analyzed_clauses") == 0,
+            f"metadata={meta}",
+        )
         res = client.get(f"/api/contracts/{contract_id}")
         check(
             "re-running does not duplicate clauses",

@@ -1,47 +1,63 @@
-"""analysis_service.py — the bridge between uploaded clauses and the DSPy pipeline.
+"""analysis_service.py — asynchronous, run-based bridge to the DSPy pipeline.
 
-This is the piece that was missing: previously a developer had to run
-``run_pipeline.py --db --save`` by hand to get any AI analysis.  Everything
-here is a thin orchestration layer over the existing, working modules —
-``dspy_pipeline``, ``optimizer`` and ``db_writer`` are imported and called,
-never reimplemented.
+POST /analyze no longer holds the HTTP request open for the whole LLM loop.
+Instead it creates an ``analysis_runs`` row (PRD/DataModel §2.6), schedules
+the work as an asyncio task, and returns 202 with the run id; the frontend
+polls the run for progress while clause results land incrementally.
 
-Two non-obvious constraints shape this file:
+Design points, each load-bearing:
 
-1. ``process_clauses()`` is synchronous and spends most of its time blocking on
-   network I/O to the LLM.  Calling it directly from an async endpoint would
-   stall the entire event loop, so it is dispatched to a worker thread.
+- **Bounded parallelism.** Clauses are analyzed ``ANALYZE_CONCURRENCY`` at a
+  time. Each in-flight clause occupies one worker thread for the duration of
+  an LLM round-trip (the DSPy call is synchronous).
+- **Per-clause persistence.** Every result is committed in its own short
+  transaction the moment it exists. A crash mid-run loses only the clauses
+  that were in flight; completed work survives and is skipped next time via
+  the content-hash cache.
+- **Content-hash caching.** ``sha256(clause text | provider/model | program
+  version)`` is stored with each result. A re-run skips clauses whose hash
+  matches — re-analyzing an unchanged contract is free and instant.
+- **Single-owner LM configuration.** ``dspy.configure()`` may only ever be
+  called by the thread that called it first, so it happens exactly once per
+  process, guarded by a lock.
+- **The "fake" provider** (``DSPY_PROVIDER=fake``) swaps in a deterministic
+  offline analyzer so the whole machinery runs without an API key — used by
+  demo mode, the smoke test, and CI.
 
-2. ``dspy.configure()`` may only ever be called by the thread that called it
-   first (see ``dspy/dsp/utils/settings.py``).  Calling ``configure_lm()`` on
-   every request from a rotating pool of worker threads therefore raises
-   ``RuntimeError`` on the second request.  ``_ensure_lm_configured()`` makes
-   the call exactly once per process instead.
+Module state (``_active_tasks``) makes this single-process by design; the
+DB-level active-run check additionally rejects doubles across restarts.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import threading
+import time
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from uuid import UUID
 
 import anyio.to_thread
-from sqlalchemy import select
+import dspy
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_schemas import RiskDistribution
 from config import settings
-from db_writer import save_results_to_db
+from database import async_session_factory
+from db_writer import save_result_to_db
 from dspy_pipeline import configure_lm, process_clauses
+from fake_llm import FakeAnalyzer
 from logger import get_logger
-from models import ParsedClause
+from models import AnalysisRun, ParsedClause, RiskScore
 from optimizer import load_optimized_analyzer
 from schemas import ClauseAnalysisResult, ClauseInput
 from scoring import compute_hybrid_risk_level
 
 logger = get_logger(__name__)
+
+ACTIVE_STATUSES = ("pending", "running")
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +65,7 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 class AnalysisError(RuntimeError):
-    """Raised when analysis cannot complete.  Carries an HTTP status code."""
+    """Raised when analysis cannot start/complete. Carries an HTTP status."""
 
     def __init__(self, message: str, status_code: int = 502) -> None:
         super().__init__(message)
@@ -61,7 +77,8 @@ class LLMNotConfiguredError(AnalysisError):
     def __init__(self) -> None:
         super().__init__(
             "AI analysis is unavailable because no language model is configured. "
-            "Set a real OPENAI_API_KEY in backend/.env and restart the backend.",
+            "Set a real OPENAI_API_KEY in backend/.env and restart the backend "
+            "(or set DSPY_PROVIDER=fake for offline demo mode).",
             status_code=503,
         )
 
@@ -86,7 +103,7 @@ def _ensure_lm_configured() -> None:
     """Call ``configure_lm()`` exactly once for the lifetime of the process."""
     global _lm_ready
 
-    if _lm_ready:
+    if _lm_ready or settings.DSPY_PROVIDER == "fake":
         return
 
     with _lm_lock:
@@ -112,24 +129,26 @@ def _ensure_lm_configured() -> None:
         _lm_ready = True
 
 
+def _build_analyzer():
+    """Runs on a worker thread: configure the LM and build the analyzer."""
+    if settings.DSPY_PROVIDER == "fake":
+        return FakeAnalyzer()
+    _ensure_lm_configured()
+    return load_optimized_analyzer()
+
+
 # ---------------------------------------------------------------------------
-# In-flight guard — one analysis per contract at a time
+# Content-hash cache
 # ---------------------------------------------------------------------------
 
-_in_flight: set[UUID] = set()
-_in_flight_guard = asyncio.Lock()
+def pipeline_fingerprint() -> str:
+    """Identity of the analysis pipeline for cache-invalidation purposes."""
+    return f"{settings.DSPY_PROVIDER}/{settings.DSPY_MODEL}|dspy-{dspy.__version__}"
 
 
-async def _claim(contract_id: UUID) -> None:
-    async with _in_flight_guard:
-        if contract_id in _in_flight:
-            raise AnalysisInProgressError()
-        _in_flight.add(contract_id)
-
-
-async def _release(contract_id: UUID) -> None:
-    async with _in_flight_guard:
-        _in_flight.discard(contract_id)
+def clause_content_hash(raw_text: str) -> str:
+    payload = f"{raw_text}|{pipeline_fingerprint()}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -182,105 +201,321 @@ async def fetch_clause_inputs(db: AsyncSession, contract_id: UUID) -> list[Claus
     ]
 
 
+async def _existing_hashes(db: AsyncSession, contract_id: UUID) -> dict[UUID, str | None]:
+    stmt = (
+        select(RiskScore.parsed_clause_id, RiskScore.content_hash)
+        .join(ParsedClause, ParsedClause.id == RiskScore.parsed_clause_id)
+        .where(ParsedClause.contract_id == contract_id)
+    )
+    rows = (await db.execute(stmt)).all()
+    return {row.parsed_clause_id: row.content_hash for row in rows}
+
+
 # ---------------------------------------------------------------------------
-# The pipeline run itself
+# Run lifecycle
 # ---------------------------------------------------------------------------
 
-def _run_pipeline_blocking(clauses: list[ClauseInput]) -> list[ClauseAnalysisResult]:
-    """Runs on a worker thread — configure the LM, then analyze every clause."""
-    _ensure_lm_configured()
-    analyzer = load_optimized_analyzer()
-    return process_clauses(clauses, analyzer=analyzer)
+# run_id -> asyncio.Task, for wait=true, graceful shutdown, and tests.
+_active_tasks: dict[UUID, asyncio.Task] = {}
+_start_guard = asyncio.Lock()
 
 
-@dataclass
-class AnalysisOutcome:
-    contract_id: UUID
-    clause_count: int
-    saved_count: int
-    results: list[ClauseAnalysisResult] = field(default_factory=list)
+async def start_analysis(
+    db: AsyncSession,
+    contract_id: UUID,
+    *,
+    force: bool = False,
+) -> AnalysisRun:
+    """Create an analysis run and schedule its execution. Returns the run row.
 
-    @property
-    def analyzed_count(self) -> int:
-        return len(self.results)
-
-    @property
-    def failed_count(self) -> int:
-        return max(0, self.clause_count - len(self.results))
-
-
-async def analyze_contract(db: AsyncSession, contract_id: UUID) -> AnalysisOutcome:
-    """Run the DSPy pipeline over one contract and persist the risk scores.
-
-    Raises ``AnalysisError`` (with an HTTP status code) on any condition the
-    caller should surface to the user rather than treat as a 500.
+    Raises AnalysisError subclasses for every condition the API should
+    surface (503 no LLM, 400 no clauses, 409 already running).
     """
     if not settings.llm_configured:
         raise LLMNotConfiguredError()
 
-    clauses = await fetch_clause_inputs(db, contract_id)
-    if not clauses:
+    clause_count = len(await fetch_clause_inputs(db, contract_id))
+    if clause_count == 0:
         raise AnalysisError(
             "This contract has no parsed clauses to analyze.",
             status_code=400,
         )
 
-    await _claim(contract_id)
-    try:
-        logger.info(
-            "Analyzing contract %s — %d clause(s) via %s/%s",
-            contract_id,
-            len(clauses),
-            settings.DSPY_PROVIDER,
-            settings.DSPY_MODEL,
+    async with _start_guard:
+        active = await db.execute(
+            select(AnalysisRun.id)
+            .where(
+                AnalysisRun.contract_id == contract_id,
+                AnalysisRun.status.in_(ACTIVE_STATUSES),
+            )
+            .limit(1)
         )
+        if active.first() is not None:
+            raise AnalysisInProgressError()
 
-        results = await anyio.to_thread.run_sync(_run_pipeline_blocking, clauses)
-
-        # Layer 3: blend the L1 confidence with the L2 output into the final
-        # categorical level. db_writer applies the identical deterministic
-        # function when persisting, so the API response and the risk_scores
-        # rows always agree.
-        for result in results:
-            result.risk_level = compute_hybrid_risk_level(
-                clause_type=result.clause_type,
-                clause_type_confidence=result.clause_type_confidence,
-                dspy_risk_score=result.dspy_risk_score,
-                num_risk_factors=len(result.risk_factors),
-            )
-
-        # process_clauses() logs and skips clauses that raise, so an empty list
-        # from a non-empty input means every single call failed — almost always
-        # a bad API key, no credit, or an unreachable provider.
-        if not results:
-            raise AnalysisError(
-                "The language model returned no usable results. Check that "
-                "OPENAI_API_KEY is valid and that the provider is reachable; "
-                "the backend log has the underlying error.",
-                status_code=502,
-            )
-
-        saved_count = await save_results_to_db(results)
-        if saved_count == 0:
-            raise AnalysisError(
-                "Analysis succeeded but the results could not be written to the "
-                "database. Check the backend log.",
-                status_code=500,
-            )
-
-        if saved_count < len(results):
-            logger.warning(
-                "Contract %s: only %d/%d results persisted.",
-                contract_id,
-                saved_count,
-                len(results),
-            )
-
-        return AnalysisOutcome(
+        run = AnalysisRun(
             contract_id=contract_id,
-            clause_count=len(clauses),
-            saved_count=saved_count,
-            results=results,
+            status="pending",
+            clause_count=clause_count,
+            run_metadata={
+                "provider": settings.DSPY_PROVIDER,
+                "model": settings.DSPY_MODEL,
+                "dspy_version": dspy.__version__,
+                "force": force,
+            },
         )
-    finally:
-        await _release(contract_id)
+        db.add(run)
+        await db.commit()
+        await db.refresh(run)
+
+    task = asyncio.create_task(
+        _execute_run(run.id, contract_id, force=force),
+        name=f"analysis-run-{run.id}",
+    )
+    _active_tasks[run.id] = task
+    task.add_done_callback(lambda _t, rid=run.id: _active_tasks.pop(rid, None))
+    return run
+
+
+async def wait_for_run(run_id: UUID) -> None:
+    """Await a run scheduled by this process (used by ?wait=true)."""
+    task = _active_tasks.get(run_id)
+    if task is not None:
+        await asyncio.shield(task)
+
+
+async def get_run(db: AsyncSession, run_id: UUID) -> AnalysisRun | None:
+    return await db.get(AnalysisRun, run_id)
+
+
+async def latest_run_for_contract(
+    db: AsyncSession, contract_id: UUID
+) -> AnalysisRun | None:
+    stmt = (
+        select(AnalysisRun)
+        .where(AnalysisRun.contract_id == contract_id)
+        .order_by(AnalysisRun.started_at.desc())
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalars().first()
+
+
+async def recover_stale_runs() -> int:
+    """Mark runs left pending/running by a previous process as failed.
+
+    Called once at startup: any run in an active state at boot cannot still
+    be executing (tasks do not survive the process), so surfacing it as
+    failed lets the user simply re-run.
+    """
+    async with async_session_factory() as session:
+        async with session.begin():
+            result = await session.execute(
+                update(AnalysisRun)
+                .where(AnalysisRun.status.in_(ACTIVE_STATUSES))
+                .values(
+                    status="failed",
+                    completed_at=datetime.now(UTC),
+                    error_message="Interrupted by a backend restart. Run the analysis again.",
+                )
+            )
+    count = result.rowcount or 0
+    if count:
+        logger.warning("Recovered %d stale analysis run(s) from a previous process.", count)
+    return count
+
+
+async def shutdown_analysis_tasks() -> None:
+    """Cancel in-flight runs on graceful shutdown (they finalize as failed)."""
+    tasks = list(_active_tasks.values())
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------
+
+def _analyze_clause_blocking(analyzer, clause: ClauseInput) -> ClauseAnalysisResult | None:
+    """Runs on a worker thread: analyze one clause with bounded retries.
+
+    ``process_clauses`` logs and swallows per-clause exceptions, returning an
+    empty list — that empty list is the retry signal here.
+    """
+    for attempt in range(settings.ANALYZE_MAX_RETRIES):
+        results = process_clauses([clause], analyzer=analyzer)
+        if results:
+            return results[0]
+        if attempt < settings.ANALYZE_MAX_RETRIES - 1:
+            # Exponential backoff inside the worker thread; the event loop
+            # is not blocked. Deterministic delays keep tests predictable.
+            time.sleep(0.8 * (2**attempt))
+    return None
+
+
+async def _update_run(run_id: UUID, **values) -> None:
+    async with async_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                update(AnalysisRun).where(AnalysisRun.id == run_id).values(**values)
+            )
+
+
+async def _increment_progress(run_id: UUID) -> None:
+    async with async_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                update(AnalysisRun)
+                .where(AnalysisRun.id == run_id)
+                .values(completed_clauses=AnalysisRun.completed_clauses + 1)
+            )
+
+
+async def _execute_run(run_id: UUID, contract_id: UUID, *, force: bool) -> None:
+    """The background body of one analysis run."""
+    t0 = time.monotonic()
+    metadata_patch: dict = {}
+
+    try:
+        await _update_run(run_id, status="running")
+
+        async with async_session_factory() as session:
+            clauses = await fetch_clause_inputs(session, contract_id)
+            existing = await _existing_hashes(session, contract_id)
+
+        hashes = {c.parsed_clause_id: clause_content_hash(c.raw_text) for c in clauses}
+
+        if force:
+            cached: list[ClauseInput] = []
+            to_run = clauses
+        else:
+            cached = [c for c in clauses if existing.get(c.parsed_clause_id) == hashes[c.parsed_clause_id]]
+            cached_ids = {c.parsed_clause_id for c in cached}
+            to_run = [c for c in clauses if c.parsed_clause_id not in cached_ids]
+
+        await _update_run(
+            run_id,
+            clause_count=len(clauses),
+            completed_clauses=len(cached),
+        )
+        metadata_patch["cached_clauses"] = len(cached)
+
+        failed_ids: list[str] = []
+        analyzed_count = 0
+
+        if to_run:
+            analyzer = await anyio.to_thread.run_sync(_build_analyzer)
+            semaphore = asyncio.Semaphore(max(1, settings.ANALYZE_CONCURRENCY))
+
+            async def _one(clause: ClauseInput) -> bool:
+                async with semaphore:
+                    result = await anyio.to_thread.run_sync(
+                        _analyze_clause_blocking, analyzer, clause
+                    )
+                if result is None:
+                    failed_ids.append(str(clause.parsed_clause_id))
+                    return False
+
+                # Layer 3: blend L1 confidence with the L2 output. db_writer
+                # applies the identical function when persisting, so response
+                # and storage always agree.
+                result.risk_level = compute_hybrid_risk_level(
+                    clause_type=result.clause_type,
+                    clause_type_confidence=result.clause_type_confidence,
+                    dspy_risk_score=result.dspy_risk_score,
+                    num_risk_factors=len(result.risk_factors),
+                )
+                saved = await save_result_to_db(
+                    result, content_hash=hashes[clause.parsed_clause_id]
+                )
+                if not saved:
+                    failed_ids.append(str(clause.parsed_clause_id))
+                    return False
+                await _increment_progress(run_id)
+                return True
+
+            outcomes = await asyncio.gather(*(_one(c) for c in to_run))
+            analyzed_count = sum(1 for ok in outcomes if ok)
+
+        succeeded_total = analyzed_count + len(cached)
+        metadata_patch["analyzed_clauses"] = analyzed_count
+        if failed_ids:
+            metadata_patch["failed_parsed_clause_ids"] = failed_ids
+
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+
+        if succeeded_total == 0:
+            await _finalize(
+                run_id,
+                status="failed",
+                elapsed_ms=elapsed_ms,
+                metadata_patch=metadata_patch,
+                error_message=(
+                    "The language model returned no usable results. Check that "
+                    "OPENAI_API_KEY is valid and the provider is reachable; the "
+                    "backend log has the underlying error."
+                ),
+            )
+        else:
+            error = None
+            if failed_ids:
+                error = f"{len(failed_ids)} clause(s) failed after retries; the rest completed."
+            await _finalize(
+                run_id,
+                status="completed",
+                elapsed_ms=elapsed_ms,
+                metadata_patch=metadata_patch,
+                error_message=error,
+            )
+            logger.info(
+                "Run %s completed: %d analyzed, %d cached, %d failed, %d ms.",
+                run_id, analyzed_count, len(cached), len(failed_ids), elapsed_ms,
+            )
+
+    except asyncio.CancelledError:
+        await _finalize(
+            run_id,
+            status="failed",
+            elapsed_ms=int((time.monotonic() - t0) * 1000),
+            metadata_patch=metadata_patch,
+            error_message="The backend shut down mid-run. Run the analysis again.",
+        )
+        raise
+    except Exception as exc:
+        logger.exception("Analysis run %s crashed.", run_id)
+        await _finalize(
+            run_id,
+            status="failed",
+            elapsed_ms=int((time.monotonic() - t0) * 1000),
+            metadata_patch=metadata_patch,
+            error_message=f"Unexpected error: {exc}",
+        )
+
+
+async def _finalize(
+    run_id: UUID,
+    *,
+    status: str,
+    elapsed_ms: int,
+    metadata_patch: dict,
+    error_message: str | None,
+) -> None:
+    try:
+        async with async_session_factory() as session:
+            async with session.begin():
+                run = await session.get(AnalysisRun, run_id)
+                if run is None:
+                    return
+                merged = dict(run.run_metadata or {})
+                merged.update(metadata_patch)
+                run.status = status
+                run.completed_at = datetime.now(UTC)
+                run.processing_time_ms = elapsed_ms
+                run.error_message = error_message
+                run.run_metadata = merged
+    except Exception:
+        logger.exception("Failed to finalize analysis run %s.", run_id)

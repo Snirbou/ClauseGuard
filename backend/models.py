@@ -113,6 +113,10 @@ class RiskScore(Base):
     plain_language_summary = Column(Text, nullable=True)
     ml_model_version_id = Column(UUID(as_uuid=True), nullable=True)
     dspy_program_version = Column(String(128), nullable=True)
+    # sha256 over (clause text | provider/model | program version). When an
+    # incoming clause hashes to the same value, re-analysis is skipped — the
+    # stored result is already the answer this pipeline would produce.
+    content_hash = Column(String(64), nullable=True)
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,
@@ -121,3 +125,40 @@ class RiskScore(Base):
 
     # Relationship
     parsed_clause = relationship("ParsedClause", back_populates="risk_score")
+
+
+class AnalysisRun(Base):
+    """One execution of the analysis pipeline over a contract.
+
+    Matches PRD/DataModel.md §2.6. The analyze endpoint returns 202 with a
+    run id; the run advances in the background and the frontend polls it.
+    """
+
+    __tablename__ = "analysis_runs"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    contract_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("contracts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status = Column(String(32), nullable=False, index=True)  # pending|running|completed|failed
+    started_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    processing_time_ms = Column(Integer, nullable=True)
+    clause_count = Column(Integer, nullable=True)
+    # Progress counter, incremented as each clause's result is persisted.
+    completed_clauses = Column(Integer, nullable=False, default=0, server_default="0")
+    error_message = Column(Text, nullable=True)
+    # "metadata" is reserved on declarative models; the column keeps the
+    # PRD's name while the attribute is run_metadata.
+    run_metadata = Column("metadata", JSONB, nullable=True)

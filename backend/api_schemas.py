@@ -88,36 +88,42 @@ class ContractDetailResponse(BaseModel):
     analyzed_clause_count: int
     has_analysis: bool
     risk_distribution: RiskDistribution
+    # Most recent analysis run, if any — lets the UI resume polling an
+    # in-flight run after a page refresh and surface the last error.
+    latest_run: AnalysisRunInfo | None = None
     clauses: list[ClauseDetail]
 
 
 # ---------------------------------------------------------------------------
-# POST /api/contracts/{id}/analyze
+# Analysis runs (POST /api/contracts/{id}/analyze + GET /api/analysis-runs/{id})
 # ---------------------------------------------------------------------------
 
-class AnalyzedClause(BaseModel):
-    """A single clause's DSPy output, echoed back from the analyze endpoint."""
+class AnalysisRunInfo(BaseModel):
+    """State of one analysis run — the shape the frontend polls."""
 
-    parsed_clause_id: UUID
+    id: UUID
     contract_id: UUID
-    clause_type: str
-    plain_language_summary: str
-    risk_factors: list[str]
-    risk_score: float
-    risk_level: str
+    status: Literal["pending", "running", "completed", "failed"]
+    started_at: datetime
+    completed_at: datetime | None = None
+    processing_time_ms: int | None = None
+    clause_count: int | None = None
+    completed_clauses: int = 0
+    error_message: str | None = None
+    # provider/model/dspy_version/cached_clauses/analyzed_clauses/...
+    run_metadata: dict[str, Any] | None = None
 
 
-class AnalyzeResponse(BaseModel):
+class AnalyzeAcceptedResponse(BaseModel):
+    """202 body: the run was scheduled; poll GET /api/analysis-runs/{id}."""
+
+    status: Literal["accepted"] = "accepted"
+    run: AnalysisRunInfo
+
+
+class AnalysisRunResponse(BaseModel):
     status: Literal["success"] = "success"
-    contract_id: UUID
-    clause_count: int          # clauses submitted to the pipeline
-    analyzed_count: int        # clauses the LLM returned a result for
-    saved_count: int           # rows written to risk_scores
-    failed_count: int          # submitted but no usable result
-    provider: str
-    model: str
-    risk_distribution: RiskDistribution
-    results: list[AnalyzedClause]
+    run: AnalysisRunInfo
 
 
 # ---------------------------------------------------------------------------

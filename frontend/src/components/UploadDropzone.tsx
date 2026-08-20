@@ -170,8 +170,8 @@ export default function UploadDropzone() {
                 {success.parsed_clauses.length} clause
                 {success.parsed_clauses.length === 1 ? "" : "s"} extracted from{" "}
                 {success.filename}.
-                {success.analysis?.status === "success"
-                  ? ` ${success.analysis.analyzed_count} analyzed automatically.`
+                {success.analysis?.status === "started"
+                  ? " Analysis started automatically — open the contract to watch it."
                   : null}
               </p>
               {success.analysis?.status === "skipped" ? (

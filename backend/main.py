@@ -26,11 +26,18 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from analysis_service import (
     AnalysisError,
-    analyze_contract,
     distribution_from_levels,
+    get_run,
+    latest_run_for_contract,
+    recover_stale_runs,
+    shutdown_analysis_tasks,
+    start_analysis,
+    wait_for_run,
 )
 from api_schemas import (
-    AnalyzeResponse,
+    AnalysisRunInfo,
+    AnalysisRunResponse,
+    AnalyzeAcceptedResponse,
     ClauseDetail,
     ContractDetailResponse,
     ContractListResponse,
@@ -84,12 +91,21 @@ async def lifespan(app: FastAPI):
             "will return 503. Set a real OPENAI_API_KEY in backend/.env."
         )
 
+    # Runs left pending/running by a previous process cannot still be
+    # executing — surface them as failed so the user can simply re-run.
+    try:
+        await recover_stale_runs()
+    except Exception:
+        logger.exception("Stale-run recovery failed (continuing).")
+
     # Load the Layer 1 classifier off the event loop so the first upload is
     # not the request that pays the spaCy model load. Never fatal: on any
     # failure classify() falls back to the keyword rules.
     mode = await anyio.to_thread.run_sync(warm_up)
     logger.info("Layer 1 classifier ready (mode=%s).", mode)
     yield
+    # Cancel in-flight analysis runs; they finalize their DB rows as failed.
+    await shutdown_analysis_tasks()
 
 
 app = FastAPI(
@@ -507,19 +523,14 @@ async def upload_contract(
 
 
 async def _auto_analyze(db: AsyncSession, contract_id: UUID) -> dict[str, Any]:
-    """Run analysis inline after upload, degrading gracefully on any failure.
+    """Schedule analysis right after upload, degrading gracefully on failure.
 
-    A failed analysis must never fail the upload — the contract is already
-    saved and the user can retry from the detail page.
+    A failed schedule must never fail the upload — the contract is already
+    saved and the user can start the analysis from the detail page. The
+    upload response does not wait for the run; it carries the run id.
     """
-    if not settings.llm_configured:
-        return {
-            "status": "skipped",
-            "detail": "No language model configured; skipped automatic analysis.",
-        }
-
     try:
-        outcome = await analyze_contract(db, contract_id)
+        run = await start_analysis(db, contract_id)
     except AnalysisError as exc:
         logger.warning("Auto-analysis skipped for %s: %s", contract_id, exc.message)
         return {"status": "skipped", "detail": exc.message}
@@ -527,15 +538,10 @@ async def _auto_analyze(db: AsyncSession, contract_id: UUID) -> dict[str, Any]:
         logger.exception("Auto-analysis crashed for contract %s", contract_id)
         return {
             "status": "skipped",
-            "detail": "Automatic analysis failed. Try again from the contract page.",
+            "detail": "Automatic analysis failed to start. Try again from the contract page.",
         }
 
-    return {
-        "status": "success",
-        "analyzed_count": outcome.analyzed_count,
-        "saved_count": outcome.saved_count,
-        "failed_count": outcome.failed_count,
-    }
+    return {"status": "started", "run_id": str(run.id)}
 
 
 # ---------------------------------------------------------------------------
@@ -603,6 +609,8 @@ async def get_contract(
     clauses = [_to_clause_detail(clause, risk) for clause, risk in rows]
     analyzed = sum(1 for clause in clauses if clause.risk_level is not None)
 
+    latest = await latest_run_for_contract(db, contract_id)
+
     return ContractDetailResponse(
         id=contract.id,
         original_filename=contract.original_filename,
@@ -611,54 +619,73 @@ async def get_contract(
         analyzed_clause_count=analyzed,
         has_analysis=analyzed > 0,
         risk_distribution=distribution_from_levels(c.risk_level for c in clauses),
+        latest_run=_to_run_info(latest) if latest else None,
         clauses=clauses,
     )
 
 
 # ---------------------------------------------------------------------------
-# POST /api/contracts/{id}/analyze — the bridge
+# Analysis runs — the bridge
 # ---------------------------------------------------------------------------
 
-@app.post("/api/contracts/{contract_id}/analyze", response_model=AnalyzeResponse)
+def _to_run_info(run) -> AnalysisRunInfo:
+    return AnalysisRunInfo(
+        id=run.id,
+        contract_id=run.contract_id,
+        status=run.status,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
+        processing_time_ms=run.processing_time_ms,
+        clause_count=run.clause_count,
+        completed_clauses=run.completed_clauses or 0,
+        error_message=run.error_message,
+        run_metadata=run.run_metadata,
+    )
+
+
+@app.post(
+    "/api/contracts/{contract_id}/analyze",
+    response_model=AnalyzeAcceptedResponse,
+    status_code=202,
+)
 async def analyze(
     contract_id: UUID,
+    wait: bool = False,
+    force: bool = False,
     db: AsyncSession = Depends(get_db),
-) -> AnalyzeResponse:
-    """Run the DSPy pipeline over every clause and persist the risk scores.
+) -> AnalyzeAcceptedResponse:
+    """Schedule an analysis run over every clause of the contract.
 
-    Runs synchronously: the response is sent only once analysis is complete
-    and written to the database. Moving this to a background worker is a
-    future improvement.
+    Returns 202 with the run immediately; poll GET /api/analysis-runs/{id}
+    for progress while per-clause results land incrementally.
+
+    Query flags:
+      wait=true   block until the run finishes before responding (tests/CLI)
+      force=true  re-analyze every clause, ignoring the content-hash cache
     """
     await _require_contract(db, contract_id)
 
     try:
-        outcome = await analyze_contract(db, contract_id)
+        run = await start_analysis(db, contract_id, force=force)
     except AnalysisError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
-    return AnalyzeResponse(
-        contract_id=contract_id,
-        clause_count=outcome.clause_count,
-        analyzed_count=outcome.analyzed_count,
-        saved_count=outcome.saved_count,
-        failed_count=outcome.failed_count,
-        provider=settings.DSPY_PROVIDER,
-        model=settings.DSPY_MODEL,
-        risk_distribution=distribution_from_levels(r.risk_level for r in outcome.results),
-        results=[
-            {
-                "parsed_clause_id": result.parsed_clause_id,
-                "contract_id": result.contract_id,
-                "clause_type": result.clause_type,
-                "plain_language_summary": result.plain_language_summary,
-                "risk_factors": result.risk_factors,
-                "risk_score": result.dspy_risk_score,
-                "risk_level": result.risk_level,
-            }
-            for result in outcome.results
-        ],
-    )
+    if wait:
+        await wait_for_run(run.id)
+        await db.refresh(run)
+
+    return AnalyzeAcceptedResponse(run=_to_run_info(run))
+
+
+@app.get("/api/analysis-runs/{run_id}", response_model=AnalysisRunResponse)
+async def get_analysis_run(
+    run_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> AnalysisRunResponse:
+    run = await get_run(db, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Analysis run not found.")
+    return AnalysisRunResponse(run=_to_run_info(run))
 
 
 # ---------------------------------------------------------------------------

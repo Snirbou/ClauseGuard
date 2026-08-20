@@ -38,9 +38,20 @@ class Settings(BaseSettings):
 
     # --- LLM / DSPy -------------------------------------------------------
     OPENAI_API_KEY: str | None = None
-    DSPY_PROVIDER: str = "openai"          # "openai" | "ollama"
+    # "openai" | "ollama" | "fake"
+    # "fake" runs a deterministic offline analyzer (see fake_llm.py): the
+    # whole product works with zero API cost, and every summary is clearly
+    # labeled as canned demo output.
+    DSPY_PROVIDER: str = "openai"
     DSPY_MODEL: str = "gpt-4o-mini"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
+
+    # --- Analysis runs ------------------------------------------------------
+    # Clauses analyzed concurrently within one run. Each holds a worker
+    # thread for the duration of an LLM round-trip.
+    ANALYZE_CONCURRENCY: int = 6
+    # Attempts per clause before it is counted as failed for the run.
+    ANALYZE_MAX_RETRIES: int = 3
 
     # --- Uploads ----------------------------------------------------------
     MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024   # 10 MB
@@ -68,8 +79,8 @@ class Settings(BaseSettings):
     @property
     def llm_configured(self) -> bool:
         """True when the configured provider has everything it needs to run."""
-        if self.DSPY_PROVIDER == "ollama":
-            return True          # local server, no API key required
+        if self.DSPY_PROVIDER in ("ollama", "fake"):
+            return True          # no API key required
         return self.openai_key_configured
 
     @property

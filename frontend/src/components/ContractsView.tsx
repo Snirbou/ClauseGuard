@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useState } from "react";
 import type { ContractSummary } from "@/types/contracts";
 import { ApiError, deleteContract, getContracts } from "@/lib/api";
 import ContractCard from "@/components/ContractCard";
@@ -9,61 +10,59 @@ import ErrorMessage from "@/components/ErrorMessage";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import { pluralize } from "@/lib/format";
 
+function errorText(err: unknown, fallback: string): string {
+  return err instanceof ApiError ? err.message : fallback;
+}
+
 export default function ContractsView() {
-  const [contracts, setContracts] = useState<ContractSummary[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setError(null);
-    setContracts(null);
-    try {
-      setContracts(await getContracts());
-    } catch (err) {
-      setError(
-        err instanceof ApiError ? err.message : "Could not load your contracts.",
-      );
-    }
-  }, []);
+  const contractsQuery = useQuery<ContractSummary[], unknown>({
+    queryKey: ["contracts"],
+    queryFn: getContracts,
+  });
 
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const onDelete = useCallback(async (contract: ContractSummary) => {
-    const confirmed = window.confirm(
-      `Delete "${contract.original_filename}"?\n\nThis permanently removes the contract, its ${contract.clause_count} ${pluralize(
-        contract.clause_count,
-        "clause",
-      )} and any analysis. This cannot be undone.`,
-    );
-    if (!confirmed) return;
-
-    setDeletingId(contract.id);
-    setError(null);
-    try {
-      await deleteContract(contract.id);
-      setContracts((current) =>
-        current ? current.filter((item) => item.id !== contract.id) : current,
-      );
-    } catch (err) {
-      setError(
-        err instanceof ApiError ? err.message : "Could not delete the contract.",
-      );
-    } finally {
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteContract(id),
+    onSettled: () => {
       setDeletingId(null);
-    }
-  }, []);
+      void queryClient.invalidateQueries({ queryKey: ["contracts"] });
+    },
+  });
 
-  if (contracts === null && !error) {
+  const onDelete = useCallback(
+    (contract: ContractSummary) => {
+      const confirmed = window.confirm(
+        `Delete "${contract.original_filename}"?\n\nThis permanently removes the contract, its ${contract.clause_count} ${pluralize(
+          contract.clause_count,
+          "clause",
+        )} and any analysis. This cannot be undone.`,
+      );
+      if (!confirmed) return;
+      setDeletingId(contract.id);
+      deleteMutation.mutate(contract.id);
+    },
+    [deleteMutation],
+  );
+
+  if (contractsQuery.isPending) {
     return <LoadingSpinner block label="Loading your contracts…" />;
   }
 
-  if (error && contracts === null) {
-    return <ErrorMessage title="Could not load contracts" message={error} onRetry={() => void load()} />;
+  if (contractsQuery.isError) {
+    return (
+      <ErrorMessage
+        title="Could not load contracts"
+        message={errorText(contractsQuery.error, "Could not load your contracts.")}
+        onRetry={() => void contractsQuery.refetch()}
+      />
+    );
   }
 
-  if (contracts && contracts.length === 0) {
+  const contracts = contractsQuery.data;
+
+  if (contracts.length === 0) {
     return (
       <div className="rounded-xl border border-dashed border-zinc-300 py-16 text-center dark:border-zinc-800">
         <p className="text-3xl" aria-hidden="true">
@@ -88,15 +87,19 @@ export default function ContractsView() {
     <div className="flex flex-col gap-4">
       {/* A delete that fails after the list has loaded shows inline rather
           than replacing the whole list. */}
-      {error ? <ErrorMessage message={error} /> : null}
+      {deleteMutation.isError ? (
+        <ErrorMessage
+          message={errorText(deleteMutation.error, "Could not delete the contract.")}
+        />
+      ) : null}
 
       <ul className="flex flex-col gap-3">
-        {contracts?.map((contract) => (
+        {contracts.map((contract) => (
           <ContractCard
             key={contract.id}
             contract={contract}
             onDelete={onDelete}
-            deleting={deletingId === contract.id}
+            deleting={deletingId === contract.id && deleteMutation.isPending}
           />
         ))}
       </ul>

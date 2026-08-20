@@ -2,8 +2,14 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ClauseDetail, ContractDetail, RiskLevel } from "@/types/contracts";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useMemo, useState } from "react";
+import type {
+  AnalysisRun,
+  ClauseDetail,
+  ContractDetail,
+  RiskLevel,
+} from "@/types/contracts";
 import { ApiError, analyzeContract, deleteContract, getContract } from "@/lib/api";
 import ClauseCard from "@/components/ClauseCard";
 import DisclaimerBanner from "@/components/DisclaimerBanner";
@@ -21,52 +27,85 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: "low", label: "🟢 Low" },
 ];
 
-function matchesFilter(clause: ClauseDetail, filter: Filter): boolean {
-  return filter === "all" || clause.risk_level === filter;
+const POLL_INTERVAL_MS = 1200;
+
+function isActiveRun(run: AnalysisRun | null | undefined): boolean {
+  return run?.status === "pending" || run?.status === "running";
+}
+
+function errorText(err: unknown, fallback: string): string {
+  return err instanceof ApiError ? err.message : fallback;
+}
+
+function AnalysisProgress({ run }: { run: AnalysisRun }) {
+  const total = run.clause_count ?? 0;
+  const done = run.completed_clauses;
+  const percent = total > 0 ? Math.round((done / total) * 100) : 5;
+
+  return (
+    <div className="rounded-xl border border-zinc-200 bg-white px-4 py-4 dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex items-center justify-between gap-3 text-sm">
+        <span className="flex items-center gap-2 font-semibold">
+          <LoadingSpinner size="sm" />
+          Analyzing clauses…
+        </span>
+        <span className="font-mono text-xs text-zinc-500 dark:text-zinc-400">
+          {done}/{total}
+        </span>
+      </div>
+      <div
+        className="mt-3 h-2 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-900"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={total}
+        aria-valuenow={done}
+        aria-label="Clauses analyzed"
+      >
+        <div
+          className="h-full rounded-full bg-zinc-900 transition-all duration-500 dark:bg-zinc-100"
+          style={{ width: `${Math.max(percent, 5)}%` }}
+        />
+      </div>
+      <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+        Results appear below as each clause finishes. You can leave this page —
+        the analysis keeps running on the server.
+      </p>
+    </div>
+  );
 }
 
 export default function ContractDetailView({ contractId }: { contractId: string }) {
   const router = useRouter();
+  const queryClient = useQueryClient();
 
-  const [contract, setContract] = useState<ContractDetail | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
+  const [deleting, setDeleting] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoadError(null);
-    setContract(null);
-    try {
-      setContract(await getContract(contractId));
-    } catch (err) {
-      setLoadError(
-        err instanceof ApiError ? err.message : "Could not load this contract.",
-      );
-    }
-  }, [contractId]);
+  const detailQuery = useQuery<ContractDetail, unknown>({
+    queryKey: ["contract", contractId],
+    queryFn: () => getContract(contractId),
+    // While a run is active the detail response changes every second or two:
+    // latest_run.completed_clauses advances and finished clauses gain risk
+    // fields. One polled query drives the whole page.
+    refetchInterval: (query) =>
+      isActiveRun(query.state.data?.latest_run) ? POLL_INTERVAL_MS : false,
+    // Keep polling even when the tab is hidden — otherwise a user who tabs
+    // away mid-run comes back to a page frozen on a stale progress bar.
+    refetchIntervalInBackground: true,
+  });
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const contract = detailQuery.data;
+  const activeRun = isActiveRun(contract?.latest_run) ? contract?.latest_run : null;
+  const failedRun =
+    contract?.latest_run?.status === "failed" ? contract.latest_run : null;
 
-  const onAnalyze = useCallback(async () => {
-    setAnalyzing(true);
-    setActionError(null);
-    try {
-      await analyzeContract(contractId);
-      // Re-fetch rather than merging the analyze response, so the view always
-      // reflects exactly what was persisted.
-      setContract(await getContract(contractId));
-    } catch (err) {
-      setActionError(
-        err instanceof ApiError ? err.message : "Analysis failed. Please try again.",
-      );
-    } finally {
-      setAnalyzing(false);
-    }
-  }, [contractId]);
+  const analyzeMutation = useMutation({
+    mutationFn: (options?: { force?: boolean }) => analyzeContract(contractId, options),
+    onSettled: () => {
+      // Success or 409, the server state changed (or we learned it) — refetch.
+      void queryClient.invalidateQueries({ queryKey: ["contract", contractId] });
+    },
+  });
 
   const onDelete = useCallback(async () => {
     if (!contract) return;
@@ -79,34 +118,34 @@ export default function ContractDetailView({ contractId }: { contractId: string 
     if (!confirmed) return;
 
     setDeleting(true);
-    setActionError(null);
     try {
       await deleteContract(contractId);
+      void queryClient.invalidateQueries({ queryKey: ["contracts"] });
       router.push("/contracts");
-    } catch (err) {
-      setActionError(
-        err instanceof ApiError ? err.message : "Could not delete the contract.",
-      );
+    } catch {
       setDeleting(false);
     }
-  }, [contract, contractId, router]);
+  }, [contract, contractId, queryClient, router]);
 
   const visibleClauses = useMemo(
-    () => contract?.clauses.filter((clause) => matchesFilter(clause, filter)) ?? [],
+    () =>
+      contract?.clauses.filter(
+        (clause: ClauseDetail) => filter === "all" || clause.risk_level === filter,
+      ) ?? [],
     [contract, filter],
   );
 
-  if (contract === null && !loadError) {
+  if (detailQuery.isPending) {
     return <LoadingSpinner block label="Loading contract…" />;
   }
 
-  if (loadError) {
+  if (detailQuery.isError || !contract) {
     return (
       <div className="flex flex-col gap-4">
         <ErrorMessage
           title="Could not load this contract"
-          message={loadError}
-          onRetry={() => void load()}
+          message={errorText(detailQuery.error, "Could not load this contract.")}
+          onRetry={() => void detailQuery.refetch()}
         />
         <Link
           href="/contracts"
@@ -118,7 +157,7 @@ export default function ContractDetailView({ contractId }: { contractId: string 
     );
   }
 
-  if (!contract) return null;
+  const analyzing = analyzeMutation.isPending || Boolean(activeRun);
 
   return (
     <div className="flex flex-col gap-6">
@@ -133,7 +172,7 @@ export default function ContractDetailView({ contractId }: { contractId: string 
 
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight break-words sm:text-3xl">
+          <h1 className="break-words text-2xl font-semibold tracking-tight sm:text-3xl">
             {contract.original_filename}
           </h1>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
@@ -148,7 +187,7 @@ export default function ContractDetailView({ contractId }: { contractId: string 
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={() => void onAnalyze()}
+            onClick={() => analyzeMutation.mutate(undefined)}
             disabled={analyzing || deleting || contract.clause_count === 0}
             className="inline-flex items-center justify-center gap-2 rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
           >
@@ -175,20 +214,18 @@ export default function ContractDetailView({ contractId }: { contractId: string 
         </div>
       </header>
 
-      {actionError ? (
-        <ErrorMessage title="Something went wrong" message={actionError} />
+      {analyzeMutation.isError ? (
+        <ErrorMessage
+          title="Could not start the analysis"
+          message={errorText(analyzeMutation.error, "Analysis failed to start.")}
+        />
       ) : null}
 
-      {analyzing ? (
-        <div className="rounded-xl border border-zinc-200 bg-white px-4 py-4 dark:border-zinc-800 dark:bg-zinc-950">
-          <LoadingSpinner
-            label={`Analyzing ${contract.clause_count} ${pluralize(
-              contract.clause_count,
-              "clause",
-            )} with the AI model. This runs one request per clause and can take a minute — keep this tab open.`}
-          />
-        </div>
+      {failedRun?.error_message && !analyzing ? (
+        <ErrorMessage title="Last analysis run failed" message={failedRun.error_message} />
       ) : null}
+
+      {activeRun ? <AnalysisProgress run={activeRun} /> : null}
 
       <RiskSummary
         distribution={contract.risk_distribution}
@@ -215,7 +252,11 @@ export default function ContractDetailView({ contractId }: { contractId: string 
           <h2 className="text-lg font-semibold tracking-tight">Clauses</h2>
 
           {contract.has_analysis ? (
-            <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Filter by risk level">
+            <div
+              className="flex flex-wrap items-center gap-1"
+              role="group"
+              aria-label="Filter by risk level"
+            >
               {FILTERS.map((option) => {
                 const active = filter === option.key;
                 return (

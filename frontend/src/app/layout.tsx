@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Header from "@/components/Header";
 import DisclaimerBanner from "@/components/DisclaimerBanner";
+import Providers from "@/components/Providers";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -34,9 +35,11 @@ export default function RootLayout({
         {/* Non-dismissable by design — see DisclaimerBanner. */}
         <DisclaimerBanner />
         <Header />
-        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 sm:px-6">
-          {children}
-        </main>
+        <Providers>
+          <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 sm:px-6">
+            {children}
+          </main>
+        </Providers>
         <footer className="border-t border-zinc-200 px-4 py-6 text-center text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
           ClauseGuard · Educational, pattern-based contract analysis · Not a law firm
         </footer>

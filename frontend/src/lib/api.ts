@@ -1,6 +1,8 @@
 import {
   MAX_UPLOAD_BYTES,
-  type AnalyzeResponse,
+  type AnalysisRun,
+  type AnalysisRunResponse,
+  type AnalyzeAcceptedResponse,
   type ApiErrorResponse,
   type ContractDetail,
   type ContractListResponse,
@@ -143,11 +145,27 @@ export async function getContract(id: string): Promise<ContractDetail> {
   return request<ContractDetail>(`/api/contracts/${encodeURIComponent(id)}`);
 }
 
-export async function analyzeContract(id: string): Promise<AnalyzeResponse> {
-  return request<AnalyzeResponse>(
-    `/api/contracts/${encodeURIComponent(id)}/analyze`,
+/**
+ * Schedule an analysis run. Returns immediately (202) with the run to poll.
+ * Pass `force` to re-analyze clauses the content-hash cache would skip.
+ */
+export async function analyzeContract(
+  id: string,
+  options?: { force?: boolean },
+): Promise<AnalysisRun> {
+  const params = options?.force ? "?force=true" : "";
+  const data = await request<AnalyzeAcceptedResponse>(
+    `/api/contracts/${encodeURIComponent(id)}/analyze${params}`,
     { method: "POST" },
   );
+  return data.run;
+}
+
+export async function getAnalysisRun(runId: string): Promise<AnalysisRun> {
+  const data = await request<AnalysisRunResponse>(
+    `/api/analysis-runs/${encodeURIComponent(runId)}`,
+  );
+  return data.run;
 }
 
 export async function deleteContract(id: string): Promise<DeleteResponse> {
