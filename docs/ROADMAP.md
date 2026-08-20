@@ -4,6 +4,17 @@
 **Baseline:** `main` @ `445de98` (post Phase 1–4 integration)
 **Measured against:** `PRD/PRD.md` v1.0, `PRD/AcceptanceCriteria.md` v1.0
 
+> **Execution status (updated 2026-08-20, same day):** Phases **A–G were
+> executed and are on `main`** — osher-step-2 merged (Layers 1+3 live),
+> Alembic + CI, asynchronous analysis runs with caching and live progress,
+> missing-protection findings + executive summary + percentiles, the UPL
+> compliance mechanics and evaluation dashboard, Argon2/session auth with
+> per-user isolation, and Docker packaging. Still deferred: cloud
+> deployment, the DSPy optimizer upgrade (needs a real API key), OCR,
+> Hebrew/RTL, and the real-contract segmentation corpus (synthetic corpus
+> shipped instead). Section 3 below is the plan as it was written; the
+> commit history on main is the record of what shipped.
+
 ---
 
 ## 1. Honest assessment

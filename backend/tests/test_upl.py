@@ -61,3 +61,11 @@ def test_pain_point_findings_are_upl_clean() -> None:
     for finding in detect_missing_protections(set()):
         assert violations(finding.title) == [], finding.pain_point
         assert violations(finding.detail) == [], finding.pain_point
+
+
+def test_risk_factor_phrasing_is_sanitized() -> None:
+    # Advice can appear in a risk factor, not just the summary — the pipeline
+    # sanitizes each factor, so the filter must handle these too.
+    result = sanitize("You should demand a liability cap")
+    assert result.rewrites == 1
+    assert "you should" not in result.text.lower()

@@ -53,9 +53,12 @@ from auth import (
     SESSION_COOKIE,
     clear_session_cookie,
     create_session,
+    dummy_verify,
     enforce_auth_rate_limit,
+    enforce_rate_limit,
     get_current_user,
     hash_password,
+    resolve_session,
     revoke_session,
     set_session_cookie,
     validate_credentials_format,
@@ -491,9 +494,13 @@ async def login(
         await db.execute(select(User).where(User.email == email))
     ).scalars().first()
 
-    # One error message for both unknown email and wrong password — do not
-    # leak which emails have accounts.
-    if user is None or not verify_password(user.password_hash, body.password):
+    # One error message AND one response time for both unknown-email and
+    # wrong-password — otherwise the ~50x Argon2 cost gap (skipped entirely
+    # when the email is unknown) is a measurable account-enumeration oracle.
+    if user is None:
+        dummy_verify(body.password)
+        raise HTTPException(status_code=401, detail="Incorrect email or password.")
+    if not verify_password(user.password_hash, body.password):
         raise HTTPException(status_code=401, detail="Incorrect email or password.")
 
     token = await create_session(db, user.id)
@@ -525,16 +532,41 @@ async def me(user: User = Depends(get_current_user)) -> UserResponse:
 @app.post("/api/disclaimer-views", status_code=204)
 async def log_disclaimer_view(
     body: DisclaimerViewRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """UPL audit trail (AC-X05): the frontend logs every disclaimer render."""
-    db.add(DisclaimerLog(page=body.page[:256], contract_id=body.contract_id))
+    """UPL audit trail (AC-X05): the frontend logs every disclaimer render.
+
+    Deliberately open (the banner shows before sign-in), but rate-limited so
+    an anonymous caller cannot flood disclaimer_logs or inflate the compliance
+    count. The attacker-supplied contract_id is not trusted — it is stored
+    only when a live session owns that contract, else NULL.
+    """
+    enforce_rate_limit(request, bucket="disclaimer", max_attempts=60)
+
+    contract_id = None
+    if body.contract_id is not None:
+        token = request.cookies.get(SESSION_COOKIE)
+        user = await resolve_session(db, token) if token else None
+        if user is not None:
+            owned = await db.get(Contract, body.contract_id)
+            if owned is not None and owned.user_id == user.id:
+                contract_id = body.contract_id
+
+    db.add(DisclaimerLog(page=body.page[:256], contract_id=contract_id))
     await db.commit()
 
 
 @app.get("/api/metrics", response_model=MetricsResponse)
-async def metrics(db: AsyncSession = Depends(get_db)) -> MetricsResponse:
-    """Evaluation dashboard data: model quality + pipeline health."""
+async def metrics(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> MetricsResponse:
+    """Evaluation dashboard data: model quality + pipeline health.
+
+    Requires a session: the run counts and latency percentiles aggregate
+    operational activity and should not be exposed to anonymous callers.
+    """
     run_rows = (
         await db.execute(
             select(

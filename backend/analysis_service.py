@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import threading
 import time
 from collections.abc import Iterable
@@ -42,6 +43,7 @@ import anyio.to_thread
 import dspy
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_schemas import RiskDistribution
@@ -148,9 +150,37 @@ def _build_analyzer():
 # Content-hash cache
 # ---------------------------------------------------------------------------
 
+# Bump when scoring.py, the DSPy signature, or the sanitize/pain-point logic
+# changes in a way that should invalidate cached per-clause results.
+_PIPELINE_VERSION = "3"
+
+
+def _optimized_program_tag() -> str:
+    """Cheap identity of the compiled DSPy program, so re-optimizing the
+    program (which changes the prompt/demos) invalidates the cache."""
+    from optimizer import OPTIMIZED_PROGRAM_PATH
+
+    try:
+        stat = os.stat(OPTIMIZED_PROGRAM_PATH)
+        return f"opt:{int(stat.st_mtime)}:{stat.st_size}"
+    except OSError:
+        return "opt:none"
+
+
 def pipeline_fingerprint() -> str:
-    """Identity of the analysis pipeline for cache-invalidation purposes."""
-    return f"{settings.resolved_provider}/{settings.DSPY_MODEL}|dspy-{dspy.__version__}"
+    """Identity of the analysis pipeline for cache-invalidation purposes.
+
+    Covers the provider/model, the DSPy version, the compiled program
+    artifact, and a manual version bumped when scoring/prompt/UPL logic
+    changes — so a cache hit means the result is genuinely what this
+    pipeline would produce today.
+    """
+    return (
+        f"{settings.resolved_provider}/{settings.DSPY_MODEL}"
+        f"|dspy-{dspy.__version__}"
+        f"|v{_PIPELINE_VERSION}"
+        f"|{_optimized_program_tag()}"
+    )
 
 
 def clause_content_hash(raw_text: str) -> str:
@@ -248,6 +278,9 @@ async def start_analysis(
             status_code=400,
         )
 
+    # The in-process guard fast-paths the common case; the partial unique
+    # index ux_one_active_run_per_contract (migration) is the real guarantee,
+    # holding even across multiple worker processes.
     async with _start_guard:
         active = await db.execute(
             select(AnalysisRun.id)
@@ -272,7 +305,13 @@ async def start_analysis(
             },
         )
         db.add(run)
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError as exc:
+            # Lost the race to another concurrent starter — the unique index
+            # rejected the second active run.
+            await db.rollback()
+            raise AnalysisInProgressError() from exc
         await db.refresh(run)
 
     task = asyncio.create_task(
@@ -331,16 +370,28 @@ async def recover_stale_runs() -> int:
     return count
 
 
-async def shutdown_analysis_tasks() -> None:
-    """Cancel in-flight runs on graceful shutdown (they finalize as failed)."""
+async def shutdown_analysis_tasks(drain_timeout: float = 5.0) -> None:
+    """Cancel in-flight runs on graceful shutdown (they finalize as failed).
+
+    A cancelled task cannot interrupt a clause that is mid-flight inside a
+    worker thread (an LLM call does not observe cancellation until it
+    returns), so awaiting the cancellations is bounded by ``drain_timeout``.
+    Any run still not settled is left for ``recover_stale_runs`` to mark
+    failed on the next startup — shutdown never blocks on a hung request.
+    """
     tasks = list(_active_tasks.values())
+    if not tasks:
+        return
     for task in tasks:
         task.cancel()
-    for task in tasks:
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
-            pass
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True), timeout=drain_timeout
+        )
+    except (TimeoutError, Exception):  # noqa: BLE001
+        logger.warning(
+            "Shutdown drain timed out; unsettled runs will be recovered on next start."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -429,14 +480,25 @@ async def _execute_run(run_id: UUID, contract_id: UUID, *, force: bool) -> None:
                     return False
 
                 # UPL guardrail (AC-P02): prescriptive phrasing is rewritten
-                # to observational phrasing before anything is persisted.
-                sanitized = sanitize(result.plain_language_summary)
-                if sanitized.rewrites:
-                    result.plain_language_summary = sanitized.text
-                    upl_rewrites[0] += sanitized.rewrites
+                # to observational phrasing before anything is persisted —
+                # applied to BOTH the summary and each risk factor, since an
+                # LLM can slip advice into either field.
+                summary_result = sanitize(result.plain_language_summary)
+                result.plain_language_summary = summary_result.text
+                rewrites_here = summary_result.rewrites
+
+                cleaned_factors: list[str] = []
+                for factor in result.risk_factors:
+                    factor_result = sanitize(factor)
+                    cleaned_factors.append(factor_result.text)
+                    rewrites_here += factor_result.rewrites
+                result.risk_factors = cleaned_factors
+
+                if rewrites_here:
+                    upl_rewrites[0] += rewrites_here
                     logger.warning(
                         "UPL filter rewrote %d prescriptive phrase(s) in clause %s.",
-                        sanitized.rewrites,
+                        rewrites_here,
                         clause.parsed_clause_id,
                     )
 
@@ -458,8 +520,22 @@ async def _execute_run(run_id: UUID, contract_id: UUID, *, force: bool) -> None:
                 await _increment_progress(run_id)
                 return True
 
-            outcomes = await asyncio.gather(*(_one(c) for c in to_run))
-            analyzed_count = sum(1 for ok in outcomes if ok)
+            # return_exceptions: one clause raising (e.g. a DB blip inside
+            # _increment_progress) must not cancel its siblings. An exception
+            # counts as a failed clause, exactly like a False return.
+            outcomes = await asyncio.gather(
+                *(_one(c) for c in to_run), return_exceptions=True
+            )
+            analyzed_count = 0
+            for clause, outcome in zip(to_run, outcomes, strict=True):
+                if outcome is True:
+                    analyzed_count += 1
+                elif isinstance(outcome, BaseException):
+                    logger.error(
+                        "Clause %s raised during analysis: %s",
+                        clause.parsed_clause_id, outcome,
+                    )
+                    failed_ids.append(str(clause.parsed_clause_id))
 
         succeeded_total = analyzed_count + len(cached)
         metadata_patch["analyzed_clauses"] = analyzed_count

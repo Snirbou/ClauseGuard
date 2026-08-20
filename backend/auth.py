@@ -64,6 +64,20 @@ def verify_password(password_hash: str, candidate: str) -> bool:
         return False
 
 
+# A fixed decoy hash whose verification burns the same Argon2 cost as a real
+# one. Login runs this when the email is unknown so the response time does not
+# reveal whether an account exists (see login() in main.py).
+_DECOY_HASH = _hasher.hash(secrets.token_urlsafe(32))
+
+
+def dummy_verify(candidate: str) -> None:
+    """Spend a full Argon2 verify and discard the result (timing equalizer)."""
+    try:
+        _hasher.verify(_DECOY_HASH, candidate)
+    except Exception:
+        pass
+
+
 def validate_credentials_format(email: str, password: str) -> str | None:
     """Return a human-readable problem, or None when the format is fine."""
     if not _EMAIL_RE.match(email or ""):
@@ -151,24 +165,63 @@ async def get_current_user(
 
 
 # ---------------------------------------------------------------------------
-# Rate limiting (auth endpoints only)
+# Rate limiting
 # ---------------------------------------------------------------------------
 
 _WINDOW_SECONDS = 60
-_MAX_ATTEMPTS = 10
-_attempts: dict[str, deque[float]] = defaultdict(deque)
+# Per-bucket sliding windows: distinct buckets ("auth", "disclaimer", ...) so
+# one kind of traffic can never exhaust another's budget.
+_attempts: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+# Bound the number of tracked clients so a spray of distinct addresses cannot
+# grow this map without limit (memory DoS).
+_MAX_TRACKED = 50_000
 
 
-def enforce_auth_rate_limit(request: Request) -> None:
-    """At most _MAX_ATTEMPTS auth calls per client address per minute."""
-    client = request.client.host if request.client else "unknown"
+def _client_key(request: Request) -> str:
+    """Best-effort client identity.
+
+    Behind the frontend's same-origin rewrite every request reaches FastAPI
+    from the proxy's address, so request.client.host is identical for all
+    users and would turn a per-client limit into a global lockout. The proxy
+    forwards the real address in X-Forwarded-For; honor its left-most entry
+    when present. Spoofable by direct callers to the backend, which is
+    acceptable for a rate limit (an attacker with real distinct addresses
+    could rotate anyway) but not for anything security-critical.
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first
+    return request.client.host if request.client else "unknown"
+
+
+def enforce_rate_limit(
+    request: Request,
+    *,
+    bucket: str,
+    max_attempts: int,
+    window_seconds: float = _WINDOW_SECONDS,
+) -> None:
+    """At most ``max_attempts`` calls per client per window for one bucket."""
     now = time.monotonic()
-    window = _attempts[client]
-    while window and now - window[0] > _WINDOW_SECONDS:
+
+    if len(_attempts) > _MAX_TRACKED:
+        # Drop fully-expired windows before they accumulate.
+        for key in [k for k, w in _attempts.items() if not w or now - w[-1] > window_seconds]:
+            _attempts.pop(key, None)
+
+    window = _attempts[(bucket, _client_key(request))]
+    while window and now - window[0] > window_seconds:
         window.popleft()
-    if len(window) >= _MAX_ATTEMPTS:
+    if len(window) >= max_attempts:
         raise HTTPException(
             status_code=429,
             detail="Too many attempts. Wait a minute and try again.",
         )
     window.append(now)
+
+
+def enforce_auth_rate_limit(request: Request) -> None:
+    """At most 10 auth calls per client per minute."""
+    enforce_rate_limit(request, bucket="auth", max_attempts=10)

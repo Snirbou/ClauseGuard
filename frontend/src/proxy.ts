@@ -10,7 +10,7 @@ import type { NextRequest } from "next/server";
  * FastAPI regardless of what this lets through.
  */
 
-const PROTECTED_PREFIXES = ["/upload", "/contracts"];
+const PROTECTED_PREFIXES = ["/upload", "/contracts", "/dashboard"];
 const SESSION_COOKIE = "cg_session";
 
 export function proxy(request: NextRequest) {
@@ -33,5 +33,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/upload", "/contracts/:path*"],
+  matcher: ["/upload", "/contracts/:path*", "/dashboard"],
 };

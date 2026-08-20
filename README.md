@@ -135,8 +135,8 @@ re-analyzing a contract costs nothing.
 | `GET` | `/api/analysis-runs/{id}` | auth; progress polling |
 | `DELETE` | `/api/contracts/{id}` | auth; cascades clauses/scores/runs/findings |
 | `GET` | `/api/health` | open; DB, LLM mode, classifier status |
-| `GET` | `/api/metrics` | open; dashboard data |
-| `POST` | `/api/disclaimer-views` | open; UPL audit trail |
+| `GET` | `/api/metrics` | auth; dashboard data |
+| `POST` | `/api/disclaimer-views` | open, rate-limited; untrusted contract_id dropped |
 
 Interactive docs: <http://127.0.0.1:8000/docs>.
 
