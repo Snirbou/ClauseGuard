@@ -103,7 +103,7 @@ async def execute_pipeline(
 
     results = process_clauses(clauses, analyzer=analyzer)
 
-    for r in results:
+    for _r in results:
         stats.record_success()
 
     for i, result in enumerate(results, 1):
@@ -144,6 +144,7 @@ def run_mock(args: argparse.Namespace) -> None:
 
 async def _fetch_clauses_from_db(contract_id: UUID | None) -> list[ClauseInput]:
     from sqlalchemy import select  # noqa: PLC0415
+
     from database import async_session_factory  # noqa: PLC0415
     from models import ParsedClause  # noqa: PLC0415
 

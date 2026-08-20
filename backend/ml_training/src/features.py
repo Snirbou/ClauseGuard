@@ -19,7 +19,7 @@ combined matrix any further.
 from __future__ import annotations
 
 import re
-from typing import Iterable
+from collections.abc import Iterable
 
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -75,7 +75,7 @@ class LegalFeatureExtractor(BaseEstimator, TransformerMixin):
         # No hyperparameters; kept for sklearn convention.
         pass
 
-    def fit(self, X: Iterable[str], y: object | None = None) -> "LegalFeatureExtractor":  # noqa: D401, N803
+    def fit(self, X: Iterable[str], y: object | None = None) -> LegalFeatureExtractor:  # noqa: D401, N803
         return self
 
     def transform(self, X: Iterable[str]) -> np.ndarray:  # noqa: N803

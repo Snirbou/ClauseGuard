@@ -11,7 +11,7 @@ so that the DSPy layer can be developed and tested independently of the DB.
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -131,10 +131,10 @@ class ClauseResult(BaseModel):
     clause_type: str
     clause_type_confidence: float
 
-    plain_language_summary: Optional[str] = None
-    risk_factors: Optional[list[str]] = None
-    dspy_risk_score: Optional[float] = None
-    risk_level: Optional[RiskLevel] = None  # hybrid (L3)
+    plain_language_summary: str | None = None
+    risk_factors: list[str] | None = None
+    dspy_risk_score: float | None = None
+    risk_level: RiskLevel | None = None  # hybrid (L3)
 
 
 class ContractResultsResponse(BaseModel):
@@ -143,4 +143,4 @@ class ContractResultsResponse(BaseModel):
     filename: str
     clauses: list[ClauseResult]
     disclaimer: str
-    detail: Optional[str] = None
+    detail: str | None = None

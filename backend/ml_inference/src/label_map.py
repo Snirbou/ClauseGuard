@@ -10,7 +10,7 @@ that every LEDGAR label has a deterministic destination (mapped or general).
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 CG8_TARGETS: tuple[str, ...] = (
     "ip_assignment",

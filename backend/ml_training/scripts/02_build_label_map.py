@@ -15,7 +15,6 @@ from collections import Counter
 from pathlib import Path
 
 import _path  # noqa: F401
-
 from src.label_map import LEDGAR_TO_CG8, map_label  # noqa: E402
 
 ARTIFACTS_DIR = Path(__file__).resolve().parents[1] / "artifacts"

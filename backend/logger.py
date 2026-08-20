@@ -16,8 +16,6 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import Optional
-
 
 _LOG_FORMAT = "[%(levelname)s] %(asctime)s | %(name)s | %(message)s"
 _DATE_FORMAT = "%H:%M:%S"
@@ -42,7 +40,7 @@ def _configure_root_logger(level: int = logging.INFO) -> None:
     _configured = True
 
 
-def get_logger(name: str, level: Optional[int] = None) -> logging.Logger:
+def get_logger(name: str, level: int | None = None) -> logging.Logger:
     """
     Return a logger namespaced under 'clauseguard.<name>'.
 

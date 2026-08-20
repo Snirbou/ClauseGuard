@@ -10,7 +10,7 @@ import numpy  # noqa: F401  isort: skip
 import re
 from contextlib import asynccontextmanager
 from decimal import Decimal
-from typing import Any, List
+from typing import Any
 from uuid import UUID
 
 import anyio.to_thread
@@ -258,7 +258,7 @@ async def _read_upload_limited(upload: UploadFile, filename: str) -> bytes:
         raise
     except Exception:
         logger.exception("Failed to read uploaded file %s", filename)
-        raise _upload_http_error(filename, "Failed to read uploaded file.")
+        raise _upload_http_error(filename, "Failed to read uploaded file.") from None
 
     return b"".join(chunks)
 
@@ -306,7 +306,7 @@ def _extract_and_classify(raw_bytes: bytes, filename: str) -> list[dict[str, Any
                 filename, "This PDF is password protected and cannot be read."
             )
 
-        page_texts: List[str] = []
+        page_texts: list[str] = []
         for page in doc:
             page_text = page.get_text("text") or ""
             if page_text.strip():
@@ -315,7 +315,7 @@ def _extract_and_classify(raw_bytes: bytes, filename: str) -> list[dict[str, Any
         raise
     except Exception:
         logger.exception("Failed to parse PDF %s", filename)
-        raise _upload_http_error(filename, "Failed to parse PDF.")
+        raise _upload_http_error(filename, "Failed to parse PDF.") from None
     finally:
         # fitz documents hold an open handle on the stream buffer.
         if doc is not None:
@@ -479,7 +479,7 @@ async def upload_contract(
             filename,
             "Failed to save the contract to the database.",
             status_code=500,
-        )
+        ) from None
 
     # --- Build handoff response (contract fields must not change) ---
     response: dict[str, Any] = {
@@ -635,7 +635,7 @@ async def analyze(
     try:
         outcome = await analyze_contract(db, contract_id)
     except AnalysisError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
     return AnalyzeResponse(
         contract_id=contract_id,
@@ -685,7 +685,7 @@ async def delete_contract(
     except Exception:
         await db.rollback()
         logger.exception("Failed to delete contract %s", contract_id)
-        raise HTTPException(status_code=500, detail="Failed to delete the contract.")
+        raise HTTPException(status_code=500, detail="Failed to delete the contract.") from None
 
     if deleted_rows == 0:
         raise HTTPException(status_code=404, detail="Contract not found.")

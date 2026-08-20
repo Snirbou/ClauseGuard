@@ -14,7 +14,7 @@ existing databases by ``ensure_indexes()`` in ``database.py`` — SQLAlchemy's
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import (
     Column,
@@ -25,7 +25,7 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
 from database import Base
@@ -45,7 +45,7 @@ class Contract(Base):
         DateTime(timezone=True),
         nullable=False,
         index=True,                       # list view orders by created_at DESC
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
     )
 
     # Relationship
@@ -79,7 +79,7 @@ class ParsedClause(Base):
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
     )
 
     # Relationship
@@ -116,7 +116,7 @@ class RiskScore(Base):
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
     )
 
     # Relationship

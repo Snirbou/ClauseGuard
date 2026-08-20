@@ -9,11 +9,10 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import _path  # noqa: F401
-
 from src.label_map import CG8_TARGETS  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -69,7 +68,7 @@ def main() -> int:
 
     metadata = {
         "artifact_name": ARTIFACT_NAME,
-        "trained_at_utc": datetime.now(timezone.utc).isoformat(),
+        "trained_at_utc": datetime.now(UTC).isoformat(),
         "labels": pipeline_classes,
         "expected_labels": list(CG8_TARGETS),
         "labels_match_expected": not (extra or missing),

@@ -22,7 +22,6 @@ import sys
 from pathlib import Path
 
 import _path  # noqa: F401
-
 from src.pipeline import build_pipeline  # noqa: E402
 
 ARTIFACTS_DIR = Path(__file__).resolve().parents[1] / "artifacts"
@@ -62,10 +61,10 @@ def downsample_general(df, label_col: str = "cg8_label", random_state: int = RAN
 
 def main() -> int:
     try:
-        import pandas as pd  # type: ignore
-        from sklearn.model_selection import GridSearchCV, StratifiedKFold, train_test_split
-        from sklearn.metrics import classification_report, f1_score
         import joblib  # type: ignore
+        import pandas as pd  # type: ignore
+        from sklearn.metrics import classification_report, f1_score
+        from sklearn.model_selection import GridSearchCV, StratifiedKFold, train_test_split
     except ImportError as exc:
         print(f"[04_train] Missing dependency: {exc}", file=sys.stderr)
         return 1

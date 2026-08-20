@@ -105,7 +105,7 @@ def configure_lm(
     if provider == "openai":
         resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not resolved_key:
-            raise EnvironmentError(
+            raise OSError(
                 "OPENAI_API_KEY is not set. Add it to backend/.env."
             )
         lm = dspy.LM(

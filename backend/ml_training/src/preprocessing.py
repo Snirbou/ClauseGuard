@@ -15,7 +15,8 @@ features.py for the cached-Doc path.
 from __future__ import annotations
 
 import re
-from typing import Final, Iterable
+from collections.abc import Iterable
+from typing import Final
 
 # ---------------------------------------------------------------------------
 # (a) PDF artifact normalization

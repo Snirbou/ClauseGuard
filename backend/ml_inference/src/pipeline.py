@@ -7,7 +7,7 @@ will load it and call `pipeline.predict_proba` + `pipeline.classes_`.
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.calibration import CalibratedClassifierCV
@@ -19,7 +19,6 @@ from sklearn.svm import LinearSVC
 from .features import LegalFeatureExtractor
 from .nlp_singleton import lemma_tokenize
 from .preprocessing import (
-    EXTENDED_LEGAL_STOPWORDS,
     normalize_numbers,
     normalize_pdf_artifacts,
 )
@@ -51,7 +50,7 @@ class TextNormalizer(BaseEstimator, TransformerMixin):
     def __init__(self, apply_number_norm: bool = False) -> None:
         self.apply_number_norm = apply_number_norm
 
-    def fit(self, X: Iterable[str], y: object | None = None) -> "TextNormalizer":  # noqa: N803
+    def fit(self, X: Iterable[str], y: object | None = None) -> TextNormalizer:  # noqa: N803
         return self
 
     def transform(self, X: Iterable[str]) -> list[str]:  # noqa: N803
