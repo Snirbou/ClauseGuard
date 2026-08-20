@@ -1,4 +1,4 @@
-# Verified working set as of 2026-08-19 on Python 3.13 / Windows 11.
+# Verified working set as of 2026-08-20 on Python 3.13 / Windows 11.
 # Lower bounds rather than exact pins, except where a floor is load-bearing.
 
 # Web framework & server
@@ -28,3 +28,15 @@ openai>=2.33.0
 # whole install with "OSError: [Errno 2] No such file or directory" unless
 # long-path support is enabled. 1.97+ ships a compiled wheel without them.
 litellm>=1.97.0
+
+# Layer 1 ML classifier (loads backend/models/clause_classifier_v1.joblib).
+# The artifact was trained on scikit-learn 1.5.2 / spaCy 3.7.5 under Python
+# 3.11; those exact pins have no cp313 wheels, so on Python 3.13 we run the
+# nearest compatible stack and validate the unpickled pipeline at load time
+# (see classifier.py) — on any failure the app falls back to the keyword
+# classifier instead of crashing.
+#   The spaCy model is NOT pip-resolvable; install separately:
+#   python -m spacy download en_core_web_lg
+scikit-learn>=1.5.2
+joblib>=1.4.2
+spacy>=3.8.7

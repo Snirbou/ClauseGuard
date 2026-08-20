@@ -24,3 +24,6 @@ npm_out.txt
 # OS
 .DS_Store
 Thumbs.db
+
+# Local editor/agent settings
+.claude/settings.local.json

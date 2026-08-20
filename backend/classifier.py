@@ -1,67 +1,54 @@
-"""Rule-based mock clause classifier (Step 1 stand-in).
+"""Production Layer 1 clause classifier.
 
-This will be replaced by Developer 1 (Full-Stack & ML) with a real
-spaCy + Scikit-learn pipeline.  Developer 2 (DSPy) does NOT touch this
-function — they only consume the classified records from the database.
+Loads the trained sklearn Pipeline (TF-IDF + dense legal features ->
+CalibratedClassifierCV(LinearSVC)) once at module import. Serves
+predict_proba per request and falls back to "general" when max class
+probability is below LOW_CONFIDENCE_THRESHOLD.
 """
 
 from __future__ import annotations
 
+import json
+import sys
+from pathlib import Path
 
-def mock_classify(raw_text: str) -> tuple[str, float]:
+# sys.path entry must run BEFORE joblib.load so the pickle's references to
+# `src.pipeline.TextNormalizer`, `src.features.LegalFeatureExtractor`, and
+# `src.nlp_singleton.lemma_tokenize` resolve to backend/ml_inference/src/*.
+_INFERENCE_ROOT = Path(__file__).resolve().parent / "ml_inference"
+if str(_INFERENCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_INFERENCE_ROOT))
+
+import joblib  # noqa: E402
+
+LOW_CONFIDENCE_THRESHOLD: float = 0.40
+
+_MODEL_PATH = Path(__file__).resolve().parent / "models" / "clause_classifier_v1.joblib"
+_META_PATH = _MODEL_PATH.with_suffix(".metadata.json")
+
+_pipeline = joblib.load(_MODEL_PATH)
+_meta = json.loads(_META_PATH.read_text(encoding="utf-8"))
+
+_classes = list(map(str, _pipeline.classes_))
+if sorted(_classes) != sorted(_meta["expected_labels"]):
+    raise RuntimeError(
+        f"Classifier label mismatch: pipeline.classes_={_classes} "
+        f"vs metadata.expected_labels={_meta['expected_labels']}"
+    )
+
+_CLASSES: list[str] = _classes
+
+
+def classify(raw_text: str) -> tuple[str, float]:
+    """Classify a clause segment.
+
+    Returns (clause_type, confidence). clause_type is one of the 8 CG8 labels;
+    confidence is the Platt-calibrated max class probability in [0, 1]. When
+    confidence < LOW_CONFIDENCE_THRESHOLD, returns ("general", confidence).
     """
-    Rule-based mock classifier.
-    Returns (clause_type, confidence).
-    """
-    text_lower = raw_text.lower()
-
-    rules: list[tuple[list[str], str, float]] = [
-        (
-            ["intellectual property", "ip ", "ip,", "ownership of work",
-             "work product", "inventions", "copyright assignment"],
-            "ip_assignment",
-            0.92,
-        ),
-        (
-            ["payment", "invoice", "compensation", "fee", "remuneration",
-             "net 30", "net 60", "billing"],
-            "payment_terms",
-            0.85,
-        ),
-        (
-            ["terminat", "cancel", "expir", "end of term",
-             "notice period", "wind down"],
-            "termination",
-            0.88,
-        ),
-        (
-            ["liable", "liability", "indemnif", "damages",
-             "limitation of liability", "hold harmless"],
-            "liability",
-            0.83,
-        ),
-        (
-            ["confidential", "non-disclosure", "nda", "proprietary information",
-             "trade secret"],
-            "confidentiality",
-            0.90,
-        ),
-        (
-            ["scope of work", "deliverables", "services", "obligations",
-             "responsibilities", "statement of work"],
-            "scope_of_work",
-            0.80,
-        ),
-        (
-            ["governing law", "jurisdiction", "dispute resolution",
-             "arbitration", "venue", "applicable law"],
-            "governing_law",
-            0.87,
-        ),
-    ]
-
-    for keywords, clause_type, confidence in rules:
-        if any(kw in text_lower for kw in keywords):
-            return clause_type, confidence
-
-    return "general", 0.50
+    probs = _pipeline.predict_proba([raw_text])[0]
+    idx = int(probs.argmax())
+    confidence = float(probs[idx])
+    if confidence < LOW_CONFIDENCE_THRESHOLD:
+        return ("general", confidence)
+    return (_CLASSES[idx], confidence)

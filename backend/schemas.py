@@ -11,9 +11,12 @@ so that the DSPy layer can be developed and tested independently of the DB.
 
 from __future__ import annotations
 
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+RiskLevel = Literal["low", "medium", "high"]
 
 
 class ClauseInput(BaseModel):
@@ -44,6 +47,16 @@ class ClauseInput(BaseModel):
             "confidentiality, scope_of_work, governing_law, general."
         ),
     )
+    clause_type_confidence: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Platt-calibrated max class probability from the Layer 1 "
+            "classifier, in [0, 1]. Below 0.40 the clause_type is overridden "
+            "to 'general' upstream; the original probability is preserved here."
+        ),
+    )
 
 
 class ClauseAnalysisResult(BaseModel):
@@ -67,6 +80,15 @@ class ClauseAnalysisResult(BaseModel):
         ...,
         description="Echo of the input clause_type for reference.",
     )
+    clause_type_confidence: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Echo of the L1 classifier confidence so that downstream scoring "
+            "(Layer 3 hybrid) can blend L1 + L2 signals without re-querying."
+        ),
+    )
     plain_language_summary: str = Field(
         ...,
         description=(
@@ -89,3 +111,36 @@ class ClauseAnalysisResult(BaseModel):
             "Based on the dspy_risk_score."
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/contracts/{id}/results — read envelope
+# ---------------------------------------------------------------------------
+
+class ClauseResult(BaseModel):
+    """One clause as exposed by the read endpoint.
+
+    L1 fields are always present. L2/L3 fields are None when the DSPy pipeline
+    has not yet produced a risk_scores row for this clause.
+    """
+
+    parsed_clause_id: UUID
+    contract_id: UUID
+    clause_index: int
+    raw_text: str
+    clause_type: str
+    clause_type_confidence: float
+
+    plain_language_summary: Optional[str] = None
+    risk_factors: Optional[list[str]] = None
+    dspy_risk_score: Optional[float] = None
+    risk_level: Optional[RiskLevel] = None  # hybrid (L3)
+
+
+class ContractResultsResponse(BaseModel):
+    status: Literal["success", "error"]
+    contract_id: UUID
+    filename: str
+    clauses: list[ClauseResult]
+    disclaimer: str
+    detail: Optional[str] = None

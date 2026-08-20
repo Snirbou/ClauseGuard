@@ -1,0 +1,25 @@
+# Core ML
+scikit-learn~=1.5.0
+spacy~=3.7.0
+joblib~=1.4.0
+
+# Data
+datasets~=2.20.0
+pandas~=2.2.0
+numpy~=1.26.0
+scipy~=1.13.0
+
+# Dedup
+datasketch~=1.6.0
+
+# Notebooks & viz
+jupyter~=1.0.0
+matplotlib~=3.9.0
+seaborn~=0.13.0
+
+# Tests
+pytest~=8.2.0
+
+# spaCy model — install separately (not pip-resolvable):
+#   python -m spacy download en_core_web_lg==3.7.1
+# Or run: python backend/ml_training/scripts/00_setup.py
