@@ -1,9 +1,10 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect } from "react";
 import type { UserInfo } from "@/types/contracts";
-import { getSession, logout } from "@/lib/api";
+import { ApiError, getSession, logout } from "@/lib/api";
 
 /**
  * The signed-in user, resolved from the httpOnly session cookie via
@@ -37,4 +38,24 @@ export function useLogout() {
       router.refresh();
     },
   });
+}
+
+/**
+ * Redirect to /login when a data query fails with 401 (session revoked or
+ * expired while the tab stayed open). Without this the data views show a
+ * Retry that just 401s again — a dead-end. Clears the stale session/cache
+ * first so the header and any cached data reset.
+ */
+export function useRedirectOnAuthError(error: unknown): void {
+  const router = useRouter();
+  const pathname = usePathname();
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (error instanceof ApiError && error.status === 401) {
+      queryClient.clear();
+      const next = pathname ? `?next=${encodeURIComponent(pathname)}` : "";
+      router.replace(`/login${next}`);
+    }
+  }, [error, router, pathname, queryClient]);
 }

@@ -17,6 +17,7 @@ import ErrorMessage from "@/components/ErrorMessage";
 import FindingsSection from "@/components/FindingsSection";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import RiskSummary from "@/components/RiskSummary";
+import { useRedirectOnAuthError } from "@/lib/useSession";
 import { formatDateTime, pluralize } from "@/lib/format";
 
 type Filter = "all" | RiskLevel;
@@ -81,6 +82,7 @@ export default function ContractDetailView({ contractId }: { contractId: string 
 
   const [filter, setFilter] = useState<Filter>("all");
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const detailQuery = useQuery<ContractDetail, unknown>({
     queryKey: ["contract", contractId],
@@ -94,6 +96,9 @@ export default function ContractDetailView({ contractId }: { contractId: string 
     // away mid-run comes back to a page frozen on a stale progress bar.
     refetchIntervalInBackground: true,
   });
+
+  // A 401 mid-session redirects to /login instead of a looping Retry.
+  useRedirectOnAuthError(detailQuery.error);
 
   const contract = detailQuery.data;
   const activeRun = isActiveRun(contract?.latest_run) ? contract?.latest_run : null;
@@ -119,11 +124,16 @@ export default function ContractDetailView({ contractId }: { contractId: string 
     if (!confirmed) return;
 
     setDeleting(true);
+    setDeleteError(null);
     try {
       await deleteContract(contractId);
       void queryClient.invalidateQueries({ queryKey: ["contracts"] });
       router.push("/contracts");
-    } catch {
+    } catch (err) {
+      // Previously swallowed — the user confirmed a delete and saw nothing.
+      setDeleteError(
+        err instanceof ApiError ? err.message : "Could not delete the contract.",
+      );
       setDeleting(false);
     }
   }, [contract, contractId, queryClient, router]);
@@ -215,11 +225,18 @@ export default function ContractDetailView({ contractId }: { contractId: string 
         </div>
       </header>
 
-      {analyzeMutation.isError ? (
+      {/* A 409 means a run is already active — the progress bar below already
+          conveys that, so don't also show a failure banner. */}
+      {analyzeMutation.isError &&
+      !(analyzeMutation.error instanceof ApiError && analyzeMutation.error.status === 409) ? (
         <ErrorMessage
           title="Could not start the analysis"
           message={errorText(analyzeMutation.error, "Analysis failed to start.")}
         />
+      ) : null}
+
+      {deleteError ? (
+        <ErrorMessage title="Could not delete the contract" message={deleteError} />
       ) : null}
 
       {failedRun?.error_message && !analyzing ? (

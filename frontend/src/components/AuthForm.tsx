@@ -63,6 +63,10 @@ export default function AuthForm({ mode }: Props) {
     try {
       const action = mode === "signup" ? register : login;
       const user = await action(trimmedEmail, password);
+      // Drop any data cached for a previous user on this client before
+      // seeding the new session — otherwise the incoming user can briefly
+      // see the prior user's cached contracts (keys are not user-scoped).
+      queryClient.clear();
       queryClient.setQueryData(["session"], user);
       const next = searchParams.get("next");
       // Only follow same-app relative paths — never external redirects.

@@ -20,10 +20,12 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
@@ -221,6 +223,18 @@ class AnalysisRun(Base):
     # "metadata" is reserved on declarative models; the column keeps the
     # PRD's name while the attribute is run_metadata.
     run_metadata = Column("metadata", JSONB, nullable=True)
+
+    # At most one active (pending/running) run per contract, enforced by the
+    # database (migration 89cb3e45c297). Declared here too so the model and
+    # the migrations agree and `alembic check` sees no drift.
+    __table_args__ = (
+        Index(
+            "ux_one_active_run_per_contract",
+            "contract_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'running')"),
+        ),
+    )
 
 
 class DisclaimerLog(Base):

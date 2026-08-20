@@ -8,6 +8,7 @@ import { ApiError, deleteContract, getContracts } from "@/lib/api";
 import ContractCard from "@/components/ContractCard";
 import ErrorMessage from "@/components/ErrorMessage";
 import LoadingSpinner from "@/components/LoadingSpinner";
+import { useRedirectOnAuthError } from "@/lib/useSession";
 import { pluralize } from "@/lib/format";
 
 function errorText(err: unknown, fallback: string): string {
@@ -22,6 +23,10 @@ export default function ContractsView() {
     queryKey: ["contracts"],
     queryFn: getContracts,
   });
+
+  // A 401 (session expired/revoked mid-session) sends the user to /login
+  // instead of a Retry that would just 401 again.
+  useRedirectOnAuthError(contractsQuery.error);
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteContract(id),

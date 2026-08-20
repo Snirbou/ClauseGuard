@@ -5,6 +5,7 @@ import type { MetricsResponse } from "@/types/contracts";
 import { ApiError, getMetrics } from "@/lib/api";
 import ErrorMessage from "@/components/ErrorMessage";
 import LoadingSpinner from "@/components/LoadingSpinner";
+import { useRedirectOnAuthError } from "@/lib/useSession";
 
 function Stat({ label, value }: { label: string; value: string | number }) {
   return (
@@ -48,6 +49,8 @@ export default function DashboardView() {
     queryKey: ["metrics"],
     queryFn: getMetrics,
   });
+
+  useRedirectOnAuthError(metricsQuery.error);
 
   if (metricsQuery.isPending) {
     return <LoadingSpinner block label="Loading metrics…" />;
