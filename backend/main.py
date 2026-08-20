@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+# numpy MUST be fully imported before dspy/litellm. dspy's import chain
+# leaves numpy in a state where a later in-process spaCy/thinc import
+# re-executes numpy/__init__ and dies with "data type 'bool' not
+# understood", killing the Layer 1 classifier. Importing numpy first is the
+# empirically verified fix (see docs/ROADMAP.md, Phase A).
+import numpy  # noqa: F401  isort: skip
+
 import re
 from contextlib import asynccontextmanager
 from decimal import Decimal
@@ -31,7 +38,7 @@ from api_schemas import (
     DeleteResponse,
     HealthResponse,
 )
-from classifier import mock_classify
+from classifier import classifier_info, classify, warm_up
 from config import settings
 from database import get_db, init_db
 from logger import get_logger
@@ -76,6 +83,12 @@ async def lifespan(app: FastAPI):
             "No language model configured — POST /api/contracts/{id}/analyze "
             "will return 503. Set a real OPENAI_API_KEY in backend/.env."
         )
+
+    # Load the Layer 1 classifier off the event loop so the first upload is
+    # not the request that pays the spaCy model load. Never fatal: on any
+    # failure classify() falls back to the keyword rules.
+    mode = await anyio.to_thread.run_sync(warm_up)
+    logger.info("Layer 1 classifier ready (mode=%s).", mode)
     yield
 
 
@@ -324,7 +337,7 @@ def _extract_and_classify(raw_bytes: bytes, filename: str) -> list[dict[str, Any
         cleaned = segment.strip()
         if not cleaned:
             continue
-        clause_type, confidence = mock_classify(cleaned)
+        clause_type, confidence = classify(cleaned)
         classified.append(
             {
                 "clause_index": clause_index,
@@ -412,6 +425,7 @@ async def health(db: AsyncSession = Depends(get_db)) -> HealthResponse:
         model=settings.DSPY_MODEL,
         auto_analyze_on_upload=settings.AUTO_ANALYZE_ON_UPLOAD,
         max_upload_mb=settings.max_upload_mb,
+        classifier=classifier_info(),
     )
 
 

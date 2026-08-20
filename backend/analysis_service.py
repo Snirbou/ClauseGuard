@@ -39,6 +39,7 @@ from logger import get_logger
 from models import ParsedClause
 from optimizer import load_optimized_analyzer
 from schemas import ClauseAnalysisResult, ClauseInput
+from scoring import compute_hybrid_risk_level
 
 logger = get_logger(__name__)
 
@@ -171,6 +172,11 @@ async def fetch_clause_inputs(db: AsyncSession, contract_id: UUID) -> list[Claus
             # clause_type is nullable in the DB but required by the pipeline.
             raw_text=row.raw_text,
             clause_type=row.clause_type or "general",
+            # Confidence feeds the Layer 3 hybrid blend. 0.5 for legacy rows
+            # persisted before the column was populated: neutral uncertainty.
+            clause_type_confidence=float(row.clause_type_confidence)
+            if row.clause_type_confidence is not None
+            else 0.5,
         )
         for row in rows
     ]
@@ -230,6 +236,18 @@ async def analyze_contract(db: AsyncSession, contract_id: UUID) -> AnalysisOutco
         )
 
         results = await anyio.to_thread.run_sync(_run_pipeline_blocking, clauses)
+
+        # Layer 3: blend the L1 confidence with the L2 output into the final
+        # categorical level. db_writer applies the identical deterministic
+        # function when persisting, so the API response and the risk_scores
+        # rows always agree.
+        for result in results:
+            result.risk_level = compute_hybrid_risk_level(
+                clause_type=result.clause_type,
+                clause_type_confidence=result.clause_type_confidence,
+                dspy_risk_score=result.dspy_risk_score,
+                num_risk_factors=len(result.risk_factors),
+            )
 
         # process_clauses() logs and skips clauses that raise, so an empty list
         # from a non-empty input means every single call failed — almost always

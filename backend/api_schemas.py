@@ -8,7 +8,7 @@ pipeline contract.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -143,3 +143,6 @@ class HealthResponse(BaseModel):
     model: str
     auto_analyze_on_upload: bool
     max_upload_mb: float
+    # Layer 1 classifier status: mode ("model" | "mock"), artifact metadata
+    # and test metrics when the trained pipeline is live.
+    classifier: dict[str, Any] = Field(default_factory=dict)
