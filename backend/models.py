@@ -31,6 +31,55 @@ from sqlalchemy.orm import relationship
 from database import Base
 
 
+class User(Base):
+    """Registered user (AC-A01/A04). Passwords are Argon2 hashes, never text."""
+
+    __tablename__ = "users"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    email = Column(String(320), nullable=False, unique=True, index=True)
+    password_hash = Column(String(256), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+
+class Session(Base):
+    """Server-side session backing the httpOnly cookie.
+
+    The cookie carries the raw token; only its sha256 is stored, so a
+    database leak does not leak usable sessions. Logout revokes the row.
+    """
+
+    __tablename__ = "sessions"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class Contract(Base):
     __tablename__ = "contracts"
 
@@ -39,7 +88,14 @@ class Contract(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    # user_id FK omitted — Step 3
+    # Owner. Nullable for rows uploaded before auth existed; every new
+    # upload sets it, and all read paths filter by it.
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     original_filename = Column(String(512), nullable=False)
     # Contract-level executive summary, written at the end of an analysis
     # run (one LLM call over the per-clause digest). Additive column.

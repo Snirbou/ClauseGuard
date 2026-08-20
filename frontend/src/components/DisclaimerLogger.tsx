@@ -2,9 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import { useEffect } from "react";
-
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+import { API_BASE_URL } from "@/lib/api";
 
 /**
  * UPL audit trail (AC-X05): records every page view that rendered the

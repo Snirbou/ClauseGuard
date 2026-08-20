@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     # bill OpenAI and block the request for as long as the analysis takes.
     AUTO_ANALYZE_ON_UPLOAD: bool = False
 
+    # --- Auth ---------------------------------------------------------------
+    # Set true when the API is served over HTTPS; the session cookie then
+    # carries the Secure attribute.
+    SESSION_COOKIE_SECURE: bool = False
+
     # --- CORS -------------------------------------------------------------
     CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
 

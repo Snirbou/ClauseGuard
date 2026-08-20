@@ -191,6 +191,13 @@ export type MetricsResponse = {
   };
 };
 
+/** The signed-in user, as returned by the auth endpoints. */
+export type UserInfo = {
+  status: "success";
+  id: string;
+  email: string;
+};
+
 /** Error envelope returned by every non-upload endpoint. */
 export type ApiErrorResponse = {
   status: "error";

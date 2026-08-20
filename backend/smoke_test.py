@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+import uuid
 from typing import Any
 
 import fitz
@@ -103,6 +104,31 @@ def main() -> None:
     )
     llm_ready = bool(health.get("llm_configured"))
     print(f"        llm_configured={llm_ready} ({health.get('provider')}/{health.get('model')})")
+
+    # --- auth ---------------------------------------------------------------
+    print("\n[1b] Authentication")
+    res = client.get("/api/contracts")
+    check("contracts require auth (401)", res.status_code == 401, f"got {res.status_code}")
+
+    email = f"smoke+{uuid.uuid4().hex[:10]}@test.local"
+    password = "correct-horse-battery"
+    res = client.post("/api/auth/register", json={"email": email, "password": password})
+    check("register responds 201", res.status_code == 201, res.text[:200])
+    check("session cookie set", "cg_session" in client.cookies)
+
+    res = client.post(
+        "/api/auth/register", json={"email": email, "password": password}
+    )
+    check("duplicate email refused (409)", res.status_code == 409, f"got {res.status_code}")
+
+    res = client.post("/api/auth/login", json={"email": email, "password": "wrong-password"})
+    check("wrong password refused (401)", res.status_code == 401, f"got {res.status_code}")
+
+    res = client.get("/api/auth/me")
+    check("me returns the signed-in user", res.status_code == 200 and res.json()["email"] == email)
+
+    res = client.post("/api/auth/register", json={"email": "bad", "password": password})
+    check("invalid email refused (400)", res.status_code == 400, f"got {res.status_code}")
 
     # --- upload -----------------------------------------------------------
     print("\n[2] POST /api/contracts/upload")
@@ -373,6 +399,26 @@ def main() -> None:
     check("responds 404", res.status_code == 404, f"got {res.status_code}")
     res = client.get("/api/contracts/not-a-uuid")
     check("malformed UUID responds 422", res.status_code == 422, f"got {res.status_code}")
+
+    # --- multi-user isolation (AC-A02) --------------------------------------
+    print("\n[9b] Second user cannot see the first user's data")
+    other = httpx.Client(base_url=base, timeout=60.0)
+    other_email = f"smoke+{uuid.uuid4().hex[:10]}@test.local"
+    res = other.post(
+        "/api/auth/register", json={"email": other_email, "password": password}
+    )
+    check("second user registers", res.status_code == 201, res.text[:200])
+    res = other.get(f"/api/contracts/{contract_id}")
+    check("cross-user contract read is 404", res.status_code == 404, f"got {res.status_code}")
+    res = other.delete(f"/api/contracts/{contract_id}")
+    check("cross-user delete is 404", res.status_code == 404, f"got {res.status_code}")
+    res = other.get("/api/contracts")
+    check(
+        "second user's list is empty",
+        res.status_code == 200 and res.json()["count"] == 0,
+        res.text[:200],
+    )
+    other.close()
 
     # --- delete -----------------------------------------------------------
     if args.keep:

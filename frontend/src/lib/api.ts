@@ -11,10 +11,14 @@ import {
   type HealthResponse,
   type MetricsResponse,
   type UploadResponse,
+  type UserInfo,
 } from "@/types/contracts";
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+// Default: same-origin — /api/* is rewritten to the backend by
+// next.config.ts, which lets the httpOnly session cookie ride along on
+// plain http in development. Point NEXT_PUBLIC_API_BASE_URL at the backend
+// directly only for cookie-less setups.
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
 /**
  * An API call that failed. `status` is 0 when the request never reached the
@@ -51,7 +55,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(NETWORK_ERROR_MESSAGE, 0);
   }
 
-  const body: unknown = await res.json().catch(() => null);
+  const body: unknown =
+    res.status === 204 ? undefined : await res.json().catch(() => null);
 
   if (!res.ok) {
     const detail = (body as ApiErrorResponse | null)?.detail;
@@ -61,7 +66,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     );
   }
 
-  if (body === null) {
+  if (res.status !== 204 && body === null) {
     throw new ApiError("The backend returned a response we could not read.", res.status);
   }
 
@@ -181,6 +186,40 @@ export async function getHealth(): Promise<HealthResponse> {
 
 export async function getMetrics(): Promise<MetricsResponse> {
   return request<MetricsResponse>("/api/metrics");
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+export async function register(email: string, password: string): Promise<UserInfo> {
+  return request<UserInfo>("/api/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function login(email: string, password: string): Promise<UserInfo> {
+  return request<UserInfo>("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function logout(): Promise<void> {
+  await request<unknown>("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+}
+
+/** Resolves to the signed-in user, or null when there is no live session. */
+export async function getSession(): Promise<UserInfo | null> {
+  try {
+    return await request<UserInfo>("/api/auth/me");
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) return null;
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------

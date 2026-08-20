@@ -14,7 +14,7 @@ from uuid import UUID
 
 import anyio.to_thread
 import fitz  # PyMuPDF
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -35,6 +35,7 @@ from analysis_service import (
 )
 from api_schemas import (
     AnalysisRunInfo,
+    AuthRequest,
     AnalysisRunResponse,
     AnalyzeAcceptedResponse,
     ClauseDetail,
@@ -46,13 +47,34 @@ from api_schemas import (
     DisclaimerViewRequest,
     HealthResponse,
     MetricsResponse,
+    UserResponse,
+)
+from auth import (
+    SESSION_COOKIE,
+    clear_session_cookie,
+    create_session,
+    enforce_auth_rate_limit,
+    get_current_user,
+    hash_password,
+    revoke_session,
+    set_session_cookie,
+    validate_credentials_format,
+    verify_password,
 )
 from classifier import classifier_info, classify, warm_up
 from segmentation import extract_lines, segment_text
 from config import settings
 from database import get_db, init_db
 from logger import get_logger
-from models import AnalysisRun, Contract, ContractFinding, DisclaimerLog, ParsedClause, RiskScore
+from models import (
+    AnalysisRun,
+    Contract,
+    ContractFinding,
+    DisclaimerLog,
+    ParsedClause,
+    RiskScore,
+    User,
+)
 
 logger = get_logger(__name__)
 
@@ -380,9 +402,13 @@ def _to_clause_detail(clause: ParsedClause, risk: RiskScore | None) -> ClauseDet
     )
 
 
-async def _require_contract(db: AsyncSession, contract_id: UUID) -> Contract:
+async def _require_contract(
+    db: AsyncSession, contract_id: UUID, user: User
+) -> Contract:
+    """Fetch a contract the user owns. 404 either way — never reveal that a
+    contract exists but belongs to someone else."""
     contract = await db.get(Contract, contract_id)
-    if contract is None:
+    if contract is None or contract.user_id != user.id:
         raise HTTPException(status_code=404, detail="Contract not found.")
     return contract
 
@@ -412,6 +438,84 @@ async def health(db: AsyncSession = Depends(get_db)) -> HealthResponse:
         max_upload_mb=settings.max_upload_mb,
         classifier=classifier_info(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+
+@app.post("/api/auth/register", response_model=UserResponse, status_code=201)
+async def register(
+    body: AuthRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> UserResponse:
+    enforce_auth_rate_limit(request)
+
+    email = body.email.strip().lower()
+    problem = validate_credentials_format(email, body.password)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+
+    existing = (
+        await db.execute(select(User).where(User.email == email))
+    ).scalars().first()
+    if existing is not None:
+        raise HTTPException(
+            status_code=409, detail="An account with this email already exists."
+        )
+
+    user = User(email=email, password_hash=hash_password(body.password))
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+    token = await create_session(db, user.id)
+    set_session_cookie(response, token)
+    logger.info("Registered user %s.", user.id)
+    return UserResponse(id=user.id, email=user.email)
+
+
+@app.post("/api/auth/login", response_model=UserResponse)
+async def login(
+    body: AuthRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> UserResponse:
+    enforce_auth_rate_limit(request)
+
+    email = body.email.strip().lower()
+    user = (
+        await db.execute(select(User).where(User.email == email))
+    ).scalars().first()
+
+    # One error message for both unknown email and wrong password — do not
+    # leak which emails have accounts.
+    if user is None or not verify_password(user.password_hash, body.password):
+        raise HTTPException(status_code=401, detail="Incorrect email or password.")
+
+    token = await create_session(db, user.id)
+    set_session_cookie(response, token)
+    return UserResponse(id=user.id, email=user.email)
+
+
+@app.post("/api/auth/logout", status_code=204)
+async def logout(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    token = request.cookies.get(SESSION_COOKIE)
+    if token:
+        await revoke_session(db, token)
+    clear_session_cookie(response)
+
+
+@app.get("/api/auth/me", response_model=UserResponse)
+async def me(user: User = Depends(get_current_user)) -> UserResponse:
+    return UserResponse(id=user.id, email=user.email)
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +590,7 @@ async def metrics(db: AsyncSession = Depends(get_db)) -> MetricsResponse:
 async def upload_contract(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     filename = file.filename or "uploaded.pdf"
 
@@ -504,7 +609,7 @@ async def upload_contract(
     # Kept in its own try so a database failure is not reported to the user as
     # a PDF parsing failure, which is what the previous single-try version did.
     try:
-        contract = Contract(original_filename=filename)
+        contract = Contract(original_filename=filename, user_id=user.id)
         db.add(contract)
         await db.flush()  # populates contract.id
 
@@ -582,7 +687,10 @@ async def _auto_analyze(db: AsyncSession, contract_id: UUID) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 @app.get("/api/contracts", response_model=ContractListResponse)
-async def list_contracts(db: AsyncSession = Depends(get_db)) -> ContractListResponse:
+async def list_contracts(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> ContractListResponse:
     # DISTINCT matters: the double LEFT JOIN multiplies rows, so a plain
     # COUNT would report clause_count * analyzed_count.
     clause_count = func.count(func.distinct(ParsedClause.id)).label("clause_count")
@@ -597,6 +705,7 @@ async def list_contracts(db: AsyncSession = Depends(get_db)) -> ContractListResp
             analyzed_count,
         )
         .select_from(Contract)
+        .where(Contract.user_id == user.id)
         .outerjoin(ParsedClause, ParsedClause.contract_id == Contract.id)
         .outerjoin(RiskScore, RiskScore.parsed_clause_id == ParsedClause.id)
         .group_by(Contract.id, Contract.original_filename, Contract.created_at)
@@ -628,8 +737,9 @@ async def list_contracts(db: AsyncSession = Depends(get_db)) -> ContractListResp
 async def get_contract(
     contract_id: UUID,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> ContractDetailResponse:
-    contract = await _require_contract(db, contract_id)
+    contract = await _require_contract(db, contract_id, user)
 
     stmt = (
         select(ParsedClause, RiskScore)
@@ -711,6 +821,7 @@ async def analyze(
     wait: bool = False,
     force: bool = False,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> AnalyzeAcceptedResponse:
     """Schedule an analysis run over every clause of the contract.
 
@@ -721,7 +832,7 @@ async def analyze(
       wait=true   block until the run finishes before responding (tests/CLI)
       force=true  re-analyze every clause, ignoring the content-hash cache
     """
-    await _require_contract(db, contract_id)
+    await _require_contract(db, contract_id, user)
 
     try:
         run = await start_analysis(db, contract_id, force=force)
@@ -739,10 +850,12 @@ async def analyze(
 async def get_analysis_run(
     run_id: UUID,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> AnalysisRunResponse:
     run = await get_run(db, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Analysis run not found.")
+    await _require_contract(db, run.contract_id, user)
     return AnalysisRunResponse(run=_to_run_info(run))
 
 
@@ -754,6 +867,7 @@ async def get_analysis_run(
 async def delete_contract(
     contract_id: UUID,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> DeleteResponse:
     """Delete a contract; parsed_clauses and risk_scores cascade in Postgres.
 
@@ -762,7 +876,11 @@ async def delete_contract(
     on an async session.
     """
     try:
-        result = await db.execute(sa_delete(Contract).where(Contract.id == contract_id))
+        result = await db.execute(
+            sa_delete(Contract).where(
+                Contract.id == contract_id, Contract.user_id == user.id
+            )
+        )
         # Read rowcount before commit — the cursor result is only guaranteed
         # to carry it while the transaction is still open.
         deleted_rows = result.rowcount
