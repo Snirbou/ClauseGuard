@@ -41,6 +41,9 @@ class Contract(Base):
     )
     # user_id FK omitted — Step 3
     original_filename = Column(String(512), nullable=False)
+    # Contract-level executive summary, written at the end of an analysis
+    # run (one LLM call over the per-clause digest). Additive column.
+    analysis_summary = Column(Text, nullable=True)
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,
@@ -162,3 +165,35 @@ class AnalysisRun(Base):
     # "metadata" is reserved on declarative models; the column keeps the
     # PRD's name while the attribute is run_metadata.
     run_metadata = Column("metadata", JSONB, nullable=True)
+
+
+class ContractFinding(Base):
+    """A contract-level finding — currently missing-protection detections.
+
+    Refreshed atomically on every analysis run (delete + insert), so the
+    stored findings always reflect the latest clause classification.
+    """
+
+    __tablename__ = "contract_findings"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    contract_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("contracts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    finding_type = Column(String(32), nullable=False)   # "missing_protection"
+    pain_point = Column(String(64), nullable=False)     # PRD §1.2 category
+    severity = Column(String(16), nullable=False)       # "high" | "medium"
+    title = Column(String(256), nullable=False)
+    detail = Column(Text, nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )

@@ -57,6 +57,12 @@ export default function ClauseCard({ clause }: Props) {
 
       {analyzed ? (
         <div className="mt-4 flex flex-col gap-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+          {clause.risk_percentile !== null && clause.risk_percentile > 0 ? (
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              Scored higher risk than {clause.risk_percentile}% of the clauses
+              in this contract.
+            </p>
+          ) : null}
           {clause.plain_language_summary ? (
             <div>
               <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">

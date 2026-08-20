@@ -80,6 +80,16 @@ export type ContractListResponse = {
   contracts: ContractSummary[];
 };
 
+/** A contract-level finding — currently missing-protection detections. */
+export type ContractFinding = {
+  id: string;
+  finding_type: "missing_protection" | string;
+  pain_point: string;
+  severity: "high" | "medium" | string;
+  title: string;
+  detail: string;
+};
+
 export type ContractDetail = {
   status: "success";
   id: string;
@@ -89,6 +99,10 @@ export type ContractDetail = {
   analyzed_clause_count: number;
   has_analysis: boolean;
   risk_distribution: RiskDistribution;
+  /** Contract-level executive summary from the latest analysis run. */
+  analysis_summary: string | null;
+  /** Missing-protection findings from the latest analysis run. */
+  findings: ContractFinding[];
   /** Most recent analysis run — lets the UI resume polling after a refresh. */
   latest_run: AnalysisRun | null;
   clauses: ClauseDetail[];

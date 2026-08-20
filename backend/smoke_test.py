@@ -261,10 +261,111 @@ def main() -> None:
             f"metadata={meta}",
         )
         res = client.get(f"/api/contracts/{contract_id}")
+        detail = res.json()
         check(
             "re-running does not duplicate clauses",
-            len(res.json()["clauses"]) == len(clauses),
+            len(detail["clauses"]) == len(clauses),
         )
+
+        print("\n[8b] Contract-level analysis outputs")
+        check(
+            "executive summary present",
+            bool(detail.get("analysis_summary")),
+        )
+        # Findings must be exactly consistent with the clause types the
+        # classifier actually detected — no assumption about which labels a
+        # given classifier assigns to this synthetic contract.
+        from pain_points import required_type_by_pain_point
+
+        detected_types = {c["clause_type"] for c in detail["clauses"]}
+        expected_missing = {
+            pain
+            for pain, required in required_type_by_pain_point().items()
+            if required not in detected_types
+        }
+        actual_missing = {f["pain_point"] for f in detail.get("findings", [])}
+        check(
+            "findings mirror the detected clause types exactly",
+            actual_missing == expected_missing,
+            f"expected={expected_missing} actual={actual_missing}",
+        )
+        analyzed_clauses = [c for c in detail["clauses"] if c["risk_level"]]
+        check(
+            "risk percentiles populated (0-100)",
+            all(
+                isinstance(c["risk_percentile"], int) and 0 <= c["risk_percentile"] <= 100
+                for c in analyzed_clauses
+            ),
+        )
+        check(
+            "percentile order follows score order",
+            sorted(analyzed_clauses, key=lambda c: c["risk_score"])[-1]["risk_percentile"]
+            == max(c["risk_percentile"] for c in analyzed_clauses),
+        )
+        print(f"        summary: {detail['analysis_summary'][:100]}...")
+
+        print("\n[8c] Incomplete contract → missing-protection findings")
+        gap_pdf_clauses = [
+            "FREELANCE SERVICE AGREEMENT",
+            "1. SCOPE OF WORK. The Contractor shall provide web development "
+            "services including design, implementation and deployment.",
+            "2. CONFIDENTIALITY. The Contractor shall hold all proprietary "
+            "information of the Client in strict confidence.",
+            "3. GOVERNING LAW. This Agreement is governed by the laws of Delaware.",
+        ]
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_textbox(
+            fitz.Rect(56, 56, 556, 780),
+            "\n\n".join(gap_pdf_clauses),
+            fontsize=9.5,
+            fontname="helv",
+            lineheight=1.35,
+        )
+        gap_pdf = doc.tobytes()
+        doc.close()
+
+        res = client.post(
+            "/api/contracts/upload",
+            files={"file": ("gappy_contract.pdf", gap_pdf, "application/pdf")},
+        )
+        check("gappy upload succeeds", res.status_code == 200, res.text[:200])
+        gap_id = res.json()["contract_id"]
+        res = client.post(f"/api/contracts/{gap_id}/analyze?wait=true")
+        check("gappy analyze completes", res.status_code == 202, res.text[:200])
+        res = client.get(f"/api/contracts/{gap_id}")
+        gap_detail = res.json()
+        gap_points = {f["pain_point"] for f in gap_detail.get("findings", [])}
+        check(
+            "missing payment terms detected",
+            "payment_traps" in gap_points,
+            f"findings={gap_points}",
+        )
+        check(
+            "missing liability clause detected",
+            "liability_gaps" in gap_points,
+            f"findings={gap_points}",
+        )
+        gap_detected_types = {c["clause_type"] for c in gap_detail["clauses"]}
+        gap_expected = {
+            pain
+            for pain, required in required_type_by_pain_point().items()
+            if required not in gap_detected_types
+        }
+        check(
+            "gappy findings mirror detected clause types exactly",
+            gap_points == gap_expected,
+            f"expected={gap_expected} actual={gap_points}",
+        )
+        check(
+            "findings are observational (no prescriptive language)",
+            all(
+                phrase not in (f["title"] + f["detail"]).lower()
+                for f in gap_detail.get("findings", [])
+                for phrase in ("you should", "we recommend", "we advise")
+            ),
+        )
+        client.delete(f"/api/contracts/{gap_id}")
 
     # --- not found --------------------------------------------------------
     print("\n[9] GET /api/contracts/{unknown}")

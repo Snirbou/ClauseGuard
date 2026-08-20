@@ -40,18 +40,24 @@ from uuid import UUID
 
 import anyio.to_thread
 import dspy
-from sqlalchemy import select, update
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_schemas import RiskDistribution
 from config import settings
+from contract_summary import (
+    fake_executive_summary,
+    generate_executive_summary_blocking,
+)
 from database import async_session_factory
 from db_writer import save_result_to_db
 from dspy_pipeline import configure_lm, process_clauses
 from fake_llm import FakeAnalyzer
 from logger import get_logger
-from models import AnalysisRun, ParsedClause, RiskScore
+from models import AnalysisRun, Contract, ContractFinding, ParsedClause, RiskScore
 from optimizer import load_optimized_analyzer
+from pain_points import detect_missing_protections
 from schemas import ClauseAnalysisResult, ClauseInput
 from scoring import compute_hybrid_risk_level
 
@@ -446,6 +452,19 @@ async def _execute_run(run_id: UUID, contract_id: UUID, *, force: bool) -> None:
         if failed_ids:
             metadata_patch["failed_parsed_clause_ids"] = failed_ids
 
+        # Contract-level pass: missing-protection findings, comparative
+        # percentiles, executive summary. Partial per-clause failures do not
+        # block it — whatever was analyzed still deserves the overview.
+        if succeeded_total > 0:
+            try:
+                findings_count = await _contract_level_pass(contract_id, clauses)
+                metadata_patch["findings"] = findings_count
+            except Exception:
+                logger.exception(
+                    "Contract-level pass failed for %s (per-clause results are saved).",
+                    contract_id,
+                )
+
         elapsed_ms = int((time.monotonic() - t0) * 1000)
 
         if succeeded_total == 0:
@@ -494,6 +513,98 @@ async def _execute_run(run_id: UUID, contract_id: UUID, *, force: bool) -> None:
             metadata_patch=metadata_patch,
             error_message=f"Unexpected error: {exc}",
         )
+
+
+# SQL for AC-R02's comparative framing: each clause's percentile rank of the
+# raw risk score within its own contract, as an integer 0–100.
+_PERCENTILE_SQL = text(
+    """
+    UPDATE risk_scores rs
+    SET risk_percentile = sub.pct
+    FROM (
+        SELECT rs2.id,
+               CAST(ROUND(100 * PERCENT_RANK() OVER (ORDER BY rs2.risk_score)) AS INT) AS pct
+        FROM risk_scores rs2
+        JOIN parsed_clauses pc ON pc.id = rs2.parsed_clause_id
+        WHERE pc.contract_id = :contract_id
+    ) sub
+    WHERE rs.id = sub.id
+    """
+)
+
+
+async def _contract_level_pass(contract_id: UUID, clauses: list[ClauseInput]) -> int:
+    """Findings + percentiles + executive summary. Returns findings count."""
+    # 1. Missing-protection findings from the clause types present.
+    present_types = {c.clause_type for c in clauses}
+    findings = detect_missing_protections(present_types)
+
+    async with async_session_factory() as session:
+        async with session.begin():
+            # Refresh atomically: findings always mirror the latest run.
+            await session.execute(
+                sa_delete(ContractFinding).where(
+                    ContractFinding.contract_id == contract_id
+                )
+            )
+            for finding in findings:
+                session.add(
+                    ContractFinding(
+                        contract_id=contract_id,
+                        finding_type="missing_protection",
+                        pain_point=finding.pain_point,
+                        severity=finding.severity,
+                        title=finding.title,
+                        detail=finding.detail,
+                    )
+                )
+
+            # 2. Comparative percentiles within the contract (AC-R02).
+            await session.execute(_PERCENTILE_SQL, {"contract_id": contract_id})
+
+    # 3. Executive summary over the persisted per-clause results.
+    async with async_session_factory() as session:
+        rows = (
+            await session.execute(
+                select(ParsedClause.clause_index, ParsedClause.clause_type, RiskScore)
+                .join(RiskScore, RiskScore.parsed_clause_id == ParsedClause.id)
+                .where(ParsedClause.contract_id == contract_id)
+                .order_by(ParsedClause.clause_index)
+            )
+        ).all()
+
+    if rows:
+        levels = [row.RiskScore.risk_level for row in rows]
+        distribution = distribution_from_levels(levels)
+
+        if settings.DSPY_PROVIDER == "fake":
+            summary = fake_executive_summary(
+                distribution, len(clauses), [f.title for f in findings]
+            )
+        else:
+            digest_lines = [
+                f"#{row.clause_index} [{row.clause_type}] risk={row.RiskScore.risk_level}: "
+                f"{(row.RiskScore.plain_language_summary or '')[:140]}"
+                for row in rows
+            ]
+            digest_lines += [f"MISSING PROTECTION: {f.title} — {f.detail}" for f in findings]
+            digest = "\n".join(digest_lines)
+
+            def _summarize() -> str:
+                _ensure_lm_configured()
+                return generate_executive_summary_blocking(digest)
+
+            summary = await anyio.to_thread.run_sync(_summarize)
+
+        async with async_session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    update(Contract)
+                    .where(Contract.id == contract_id)
+                    .values(analysis_summary=summary)
+                )
+
+    return len(findings)
 
 
 async def _finalize(

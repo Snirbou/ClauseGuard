@@ -14,6 +14,7 @@ import { ApiError, analyzeContract, deleteContract, getContract } from "@/lib/ap
 import ClauseCard from "@/components/ClauseCard";
 import DisclaimerBanner from "@/components/DisclaimerBanner";
 import ErrorMessage from "@/components/ErrorMessage";
+import FindingsSection from "@/components/FindingsSection";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import RiskSummary from "@/components/RiskSummary";
 import { formatDateTime, pluralize } from "@/lib/format";
@@ -231,6 +232,22 @@ export default function ContractDetailView({ contractId }: { contractId: string 
         distribution={contract.risk_distribution}
         clauseCount={contract.clause_count}
       />
+
+      {contract.analysis_summary ? (
+        <section
+          aria-label="Executive summary"
+          className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950"
+        >
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            Executive summary
+          </h2>
+          <p className="mt-2 text-sm leading-relaxed text-zinc-800 dark:text-zinc-100">
+            {contract.analysis_summary}
+          </p>
+        </section>
+      ) : null}
+
+      <FindingsSection findings={contract.findings ?? []} />
 
       <DisclaimerBanner variant="full" />
 

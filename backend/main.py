@@ -7,7 +7,6 @@ from __future__ import annotations
 # empirically verified fix (see docs/ROADMAP.md, Phase A).
 import numpy  # noqa: F401  isort: skip
 
-import re
 from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import Any
@@ -40,30 +39,22 @@ from api_schemas import (
     AnalyzeAcceptedResponse,
     ClauseDetail,
     ContractDetailResponse,
+    ContractFindingInfo,
     ContractListResponse,
     ContractSummary,
     DeleteResponse,
     HealthResponse,
 )
 from classifier import classifier_info, classify, warm_up
+from segmentation import extract_lines, segment_text
 from config import settings
 from database import get_db, init_db
 from logger import get_logger
-from models import Contract, ParsedClause, RiskScore
+from models import Contract, ContractFinding, ParsedClause, RiskScore
 
 logger = get_logger(__name__)
 
 _UPLOAD_CHUNK_BYTES = 1024 * 1024      # stream the upload 1 MB at a time
-
-# Fallback clause boundaries, used only when blank-line splitting fails.
-# Zero-width lookahead so the heading stays attached to the clause it starts.
-_CLAUSE_HEADING_RE = re.compile(
-    r"(?=^[ \t]*(?:"
-    r"(?:ARTICLE|SECTION|CLAUSE)\s+[0-9IVXL]+"     # "ARTICLE 5", "Section IV"
-    r"|\d{1,2}(?:\.\d{1,2})*[.)]\s+[A-Z]"          # "1. SCOPE", "2.1) Payment"
-    r"))",
-    re.MULTILINE | re.IGNORECASE,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -279,34 +270,6 @@ async def _read_upload_limited(upload: UploadFile, filename: str) -> bytes:
     return b"".join(chunks)
 
 
-def _segment_clauses(full_text: str) -> list[str]:
-    """Split extracted PDF text into individual clauses.
-
-    Blank lines remain the primary rule. But PyMuPDF very often extracts a
-    contract as one line per *visual* line with no blank lines at all, in which
-    case that rule returns the entire document as a single clause and the whole
-    downstream pipeline degenerates — one classification and one AI summary for
-    the whole agreement.
-
-    When that happens, fall back to splitting on numbered clause headings.
-    The fallback only applies if it actually finds boundaries, so a genuinely
-    single-clause document still comes back as one clause.
-    """
-    segments = [part.strip() for part in re.split(r"\n\s*\n", full_text) if part.strip()]
-    if len(segments) > 1:
-        return segments
-
-    fallback = [part.strip() for part in _CLAUSE_HEADING_RE.split(full_text) if part.strip()]
-    if len(fallback) > 1:
-        logger.info(
-            "No blank-line clause breaks found; segmented %d clauses by heading.",
-            len(fallback),
-        )
-        return fallback
-
-    return segments
-
-
 def _extract_and_classify(raw_bytes: bytes, filename: str) -> list[dict[str, Any]]:
     """Extract text, segment into clauses, and classify each one.
 
@@ -327,6 +290,10 @@ def _extract_and_classify(raw_bytes: bytes, filename: str) -> list[dict[str, Any
             page_text = page.get_text("text") or ""
             if page_text.strip():
                 page_texts.append(page_text)
+
+        # Typography (font sizes, bold flags) feeds the layout-based
+        # segmentation strategy; it must be read while the doc is open.
+        layout_lines = extract_lines(doc)
     except HTTPException:
         raise
     except Exception:
@@ -345,7 +312,7 @@ def _extract_and_classify(raw_bytes: bytes, filename: str) -> list[dict[str, Any
             "which needs OCR.",
         )
 
-    segments = _segment_clauses(full_text)
+    segments = segment_text(full_text, layout_lines)
 
     classified: list[dict[str, Any]] = []
     clause_index = 1
@@ -611,6 +578,29 @@ async def get_contract(
 
     latest = await latest_run_for_contract(db, contract_id)
 
+    finding_rows = (
+        (
+            await db.execute(
+                select(ContractFinding)
+                .where(ContractFinding.contract_id == contract_id)
+                .order_by(ContractFinding.severity, ContractFinding.pain_point)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    findings = [
+        ContractFindingInfo(
+            id=f.id,
+            finding_type=f.finding_type,
+            pain_point=f.pain_point,
+            severity=f.severity,
+            title=f.title,
+            detail=f.detail,
+        )
+        for f in finding_rows
+    ]
+
     return ContractDetailResponse(
         id=contract.id,
         original_filename=contract.original_filename,
@@ -619,6 +609,8 @@ async def get_contract(
         analyzed_clause_count=analyzed,
         has_analysis=analyzed > 0,
         risk_distribution=distribution_from_levels(c.risk_level for c in clauses),
+        analysis_summary=contract.analysis_summary,
+        findings=findings,
         latest_run=_to_run_info(latest) if latest else None,
         clauses=clauses,
     )

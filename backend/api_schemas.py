@@ -79,6 +79,17 @@ class ContractListResponse(BaseModel):
 # GET /api/contracts/{id}
 # ---------------------------------------------------------------------------
 
+class ContractFindingInfo(BaseModel):
+    """A contract-level finding (currently: missing-protection detections)."""
+
+    id: UUID
+    finding_type: str          # "missing_protection"
+    pain_point: str            # PRD §1.2 category
+    severity: str              # "high" | "medium"
+    title: str
+    detail: str
+
+
 class ContractDetailResponse(BaseModel):
     status: Literal["success"] = "success"
     id: UUID
@@ -88,6 +99,9 @@ class ContractDetailResponse(BaseModel):
     analyzed_clause_count: int
     has_analysis: bool
     risk_distribution: RiskDistribution
+    # Contract-level outputs of the latest analysis run.
+    analysis_summary: str | None = None
+    findings: list[ContractFindingInfo] = Field(default_factory=list)
     # Most recent analysis run, if any — lets the UI resume polling an
     # in-flight run after a page refresh and surface the last error.
     latest_run: AnalysisRunInfo | None = None
