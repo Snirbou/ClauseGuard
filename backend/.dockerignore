@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.pyc
+.env
+pip.log
+pip_install.log
+ml_training/data_cache/
+ml_training/artifacts/
+.pytest_cache/
+.ruff_cache/

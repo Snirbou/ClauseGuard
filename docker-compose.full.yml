@@ -1,0 +1,61 @@
+# Full-stack ClauseGuard: database + API + web, one command.
+#
+#   docker compose -f docker-compose.full.yml up --build
+#
+# Then open http://localhost:3000. Provide a real OPENAI_API_KEY via the
+# environment (or an .env file next to this compose file) to switch the AI
+# analysis from offline demo mode to real OpenAI calls.
+#
+# For day-to-day development prefer docker-compose.yml (database only) with
+# uvicorn + next dev running locally — see README.md.
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: clauseguard-db-full
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: clauseguard
+      POSTGRES_PASSWORD: clauseguard
+      POSTGRES_DB: clauseguard
+    volumes:
+      - pg_data_full:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clauseguard"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+      # INSTALL_ML: "false" skips the 600MB spaCy model layer; the classifier
+      # then falls back to keyword rules.
+      args:
+        INSTALL_ML: "true"
+    container_name: clauseguard-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://clauseguard:clauseguard@db:5432/clauseguard
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-your-openai-api-key-here}
+      DSPY_PROVIDER: ${DSPY_PROVIDER:-auto}
+    ports:
+      - "8000:8000"
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        BACKEND_URL: http://api:8000
+    container_name: clauseguard-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+
+volumes:
+  pg_data_full:

@@ -432,7 +432,7 @@ async def health(db: AsyncSession = Depends(get_db)) -> HealthResponse:
         status="ok" if database == "ok" else "degraded",
         database=database,
         llm_configured=settings.llm_configured,
-        provider=settings.DSPY_PROVIDER,
+        provider=settings.resolved_provider,
         model=settings.DSPY_MODEL,
         auto_analyze_on_upload=settings.AUTO_ANALYZE_ON_UPLOAD,
         max_upload_mb=settings.max_upload_mb,
@@ -571,7 +571,7 @@ async def metrics(db: AsyncSession = Depends(get_db)) -> MetricsResponse:
             "p95_ms": percentile(completed_times, 0.95),
         },
         pipeline={
-            "provider": settings.DSPY_PROVIDER,
+            "provider": settings.resolved_provider,
             "model": settings.DSPY_MODEL,
             "concurrency": settings.ANALYZE_CONCURRENCY,
             "max_retries": settings.ANALYZE_MAX_RETRIES,

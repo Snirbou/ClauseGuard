@@ -6,12 +6,17 @@ Full setup, architecture, API reference and configuration live in the
 ## Install
 
 ```powershell
-pip install -r requirements.txt
+python -m venv venv
+venv\Scripts\pip install -r requirements.txt
+venv\Scripts\python -m spacy download en_core_web_lg   # optional, ~600MB
 ```
 
-If the install fails with `OSError: [Errno 2] No such file or directory` while
-unpacking `litellm`, that is the Windows 260-character path limit — see the
-"Windows install note" section of the root README.
+Without the spaCy model the trained classifier falls back to keyword rules
+(`/api/health` reports `"mode": "mock"`); everything else works.
+
+If the install fails with `OSError: [Errno 2] No such file or directory`
+while unpacking litellm, that is the Windows 260-character path limit — see
+the note in `requirements.txt`.
 
 ## Configure
 
@@ -19,32 +24,43 @@ unpacking `litellm`, that is the Windows 260-character path limit — see the
 copy .env.example .env
 ```
 
-Set a real `OPENAI_API_KEY` to enable AI analysis. Everything else works
-without one.
+With the placeholder key the app runs in offline demo mode. Paste a real
+`OPENAI_API_KEY` to switch to real analysis (`DSPY_PROVIDER=auto` picks it
+up on restart).
 
 ## Run
 
 ```powershell
-uvicorn main:app --reload --port 8000
+venv\Scripts\python -m uvicorn main:app --reload --port 8000
 ```
 
-Interactive docs: <http://127.0.0.1:8000/docs>
+Startup runs Alembic migrations (`database.init_db`), recovers stale
+analysis runs, and warms the classifier. Interactive docs:
+<http://127.0.0.1:8000/docs>
 
-## Endpoints
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/api/health` | Database reachability, LLM configuration, upload limit |
-| `POST` | `/api/contracts/upload` | Upload a PDF → extract, segment, classify, persist |
-| `GET` | `/api/contracts` | List contracts with clause counts and analysis status |
-| `GET` | `/api/contracts/{id}` | Contract detail with clauses joined to their risk scores |
-| `POST` | `/api/contracts/{id}/analyze` | Run the DSPy pipeline and persist `risk_scores` |
-| `DELETE` | `/api/contracts/{id}` | Delete a contract (clauses and scores cascade) |
-
-## CLI
+## Verify
 
 ```powershell
-python run_pipeline.py --mock                      # offline, no DB needed
-python run_pipeline.py --db --contract-id <UUID> --save
-python run_pipeline.py --mock --optimize           # BootstrapFewShot
+venv\Scripts\python -m pytest tests\          # 94 unit tests
+venv\Scripts\python smoke_test.py             # 63 end-to-end checks (needs DB + server)
+venv\Scripts\python -m ruff check .
+```
+
+## Migrations
+
+```powershell
+venv\Scripts\python -m alembic upgrade head
+venv\Scripts\python -m alembic revision --autogenerate -m "describe change"
+```
+
+The URL comes from `config.settings` (backend/.env); `ALEMBIC_DATABASE_URL`
+overrides it for scratch databases. Databases created before Alembic are
+detected and stamped automatically at startup.
+
+## CLI (offline pipeline runs)
+
+```powershell
+venv\Scripts\python run_pipeline.py --mock                      # no DB needed
+venv\Scripts\python run_pipeline.py --db --contract-id <UUID> --save
+venv\Scripts\python run_pipeline.py --mock --optimize           # BootstrapFewShot
 ```

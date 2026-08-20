@@ -110,7 +110,7 @@ def _ensure_lm_configured() -> None:
     """Call ``configure_lm()`` exactly once for the lifetime of the process."""
     global _lm_ready
 
-    if _lm_ready or settings.DSPY_PROVIDER == "fake":
+    if _lm_ready or settings.resolved_provider == "fake":
         return
 
     with _lm_lock:
@@ -120,7 +120,7 @@ def _ensure_lm_configured() -> None:
         if not settings.llm_configured:
             raise LLMNotConfiguredError()
 
-        if settings.DSPY_PROVIDER == "ollama":
+        if settings.resolved_provider == "ollama":
             configure_lm(
                 provider="ollama",
                 model=settings.DSPY_MODEL,
@@ -128,7 +128,7 @@ def _ensure_lm_configured() -> None:
             )
         else:
             configure_lm(
-                provider=settings.DSPY_PROVIDER,
+                provider=settings.resolved_provider,
                 model=settings.DSPY_MODEL,
                 api_key=settings.OPENAI_API_KEY,
             )
@@ -138,7 +138,7 @@ def _ensure_lm_configured() -> None:
 
 def _build_analyzer():
     """Runs on a worker thread: configure the LM and build the analyzer."""
-    if settings.DSPY_PROVIDER == "fake":
+    if settings.resolved_provider == "fake":
         return FakeAnalyzer()
     _ensure_lm_configured()
     return load_optimized_analyzer()
@@ -150,7 +150,7 @@ def _build_analyzer():
 
 def pipeline_fingerprint() -> str:
     """Identity of the analysis pipeline for cache-invalidation purposes."""
-    return f"{settings.DSPY_PROVIDER}/{settings.DSPY_MODEL}|dspy-{dspy.__version__}"
+    return f"{settings.resolved_provider}/{settings.DSPY_MODEL}|dspy-{dspy.__version__}"
 
 
 def clause_content_hash(raw_text: str) -> str:
@@ -265,7 +265,7 @@ async def start_analysis(
             status="pending",
             clause_count=clause_count,
             run_metadata={
-                "provider": settings.DSPY_PROVIDER,
+                "provider": settings.resolved_provider,
                 "model": settings.DSPY_MODEL,
                 "dspy_version": dspy.__version__,
                 "force": force,
@@ -593,7 +593,7 @@ async def _contract_level_pass(contract_id: UUID, clauses: list[ClauseInput]) ->
         levels = [row.RiskScore.risk_level for row in rows]
         distribution = distribution_from_levels(levels)
 
-        if settings.DSPY_PROVIDER == "fake":
+        if settings.resolved_provider == "fake":
             summary = fake_executive_summary(
                 distribution, len(clauses), [f.title for f in findings]
             )

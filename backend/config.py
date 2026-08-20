@@ -38,11 +38,13 @@ class Settings(BaseSettings):
 
     # --- LLM / DSPy -------------------------------------------------------
     OPENAI_API_KEY: str | None = None
-    # "openai" | "ollama" | "fake"
-    # "fake" runs a deterministic offline analyzer (see fake_llm.py): the
-    # whole product works with zero API cost, and every summary is clearly
-    # labeled as canned demo output.
-    DSPY_PROVIDER: str = "openai"
+    # "auto" | "openai" | "ollama" | "fake"
+    #   auto   — openai when a real OPENAI_API_KEY is set, otherwise the
+    #            offline demo analyzer. Inserting a key is the only step
+    #            needed to switch from demo output to real analysis.
+    #   fake   — deterministic offline analyzer (fake_llm.py): zero API
+    #            cost, every summary clearly labeled as canned demo output.
+    DSPY_PROVIDER: str = "auto"
     DSPY_MODEL: str = "gpt-4o-mini"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
@@ -82,9 +84,16 @@ class Settings(BaseSettings):
         return not key.startswith("sk-your-")
 
     @property
+    def resolved_provider(self) -> str:
+        """The provider actually in effect ("auto" resolved by key presence)."""
+        if self.DSPY_PROVIDER == "auto":
+            return "openai" if self.openai_key_configured else "fake"
+        return self.DSPY_PROVIDER
+
+    @property
     def llm_configured(self) -> bool:
-        """True when the configured provider has everything it needs to run."""
-        if self.DSPY_PROVIDER in ("ollama", "fake"):
+        """True when the effective provider has everything it needs to run."""
+        if self.resolved_provider in ("ollama", "fake"):
             return True          # no API key required
         return self.openai_key_configured
 

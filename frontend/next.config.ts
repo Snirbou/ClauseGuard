@@ -3,6 +3,8 @@ import type { NextConfig } from "next";
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://127.0.0.1:8000";
 
 const nextConfig: NextConfig = {
+  // Self-contained server bundle for the Docker image (frontend/Dockerfile).
+  output: "standalone",
   turbopack: {
     // Avoid Turbopack path parsing issues when the repo path contains non-ASCII.
     root: __dirname,
