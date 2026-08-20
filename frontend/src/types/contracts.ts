@@ -158,6 +158,39 @@ export type HealthResponse = {
   max_upload_mb: number;
 };
 
+/** Payload of GET /api/metrics — the evaluation dashboard. */
+export type MetricsResponse = {
+  status: "success";
+  classifier: {
+    mode: "model" | "mock" | string;
+    low_confidence_threshold: number;
+    load_error?: string;
+    artifact?: string;
+    trained_at_utc?: string;
+    test_macro_f1?: number;
+    per_class_f1?: Record<string, number>;
+    labels?: string[];
+    sklearn_version_trained?: string;
+  };
+  runs: {
+    total: number;
+    completed: number;
+    failed: number;
+    active: number;
+    p50_ms: number | null;
+    p95_ms: number | null;
+  };
+  pipeline: {
+    provider: string;
+    model: string;
+    concurrency: number;
+    max_retries: number;
+  };
+  compliance: {
+    disclaimer_views_logged: number;
+  };
+};
+
 /** Error envelope returned by every non-upload endpoint. */
 export type ApiErrorResponse = {
   status: "error";

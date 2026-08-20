@@ -43,14 +43,16 @@ from api_schemas import (
     ContractListResponse,
     ContractSummary,
     DeleteResponse,
+    DisclaimerViewRequest,
     HealthResponse,
+    MetricsResponse,
 )
 from classifier import classifier_info, classify, warm_up
 from segmentation import extract_lines, segment_text
 from config import settings
 from database import get_db, init_db
 from logger import get_logger
-from models import Contract, ContractFinding, ParsedClause, RiskScore
+from models import AnalysisRun, Contract, ContractFinding, DisclaimerLog, ParsedClause, RiskScore
 
 logger = get_logger(__name__)
 
@@ -409,6 +411,70 @@ async def health(db: AsyncSession = Depends(get_db)) -> HealthResponse:
         auto_analyze_on_upload=settings.AUTO_ANALYZE_ON_UPLOAD,
         max_upload_mb=settings.max_upload_mb,
         classifier=classifier_info(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Compliance & metrics
+# ---------------------------------------------------------------------------
+
+@app.post("/api/disclaimer-views", status_code=204)
+async def log_disclaimer_view(
+    body: DisclaimerViewRequest,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """UPL audit trail (AC-X05): the frontend logs every disclaimer render."""
+    db.add(DisclaimerLog(page=body.page[:256], contract_id=body.contract_id))
+    await db.commit()
+
+
+@app.get("/api/metrics", response_model=MetricsResponse)
+async def metrics(db: AsyncSession = Depends(get_db)) -> MetricsResponse:
+    """Evaluation dashboard data: model quality + pipeline health."""
+    run_rows = (
+        await db.execute(
+            select(
+                AnalysisRun.status,
+                AnalysisRun.processing_time_ms,
+            ).order_by(AnalysisRun.started_at.desc())
+        )
+    ).all()
+
+    completed_times = sorted(
+        row.processing_time_ms
+        for row in run_rows
+        if row.status == "completed" and row.processing_time_ms is not None
+    )
+
+    def percentile(times: list[int], q: float) -> int | None:
+        if not times:
+            return None
+        index = min(len(times) - 1, max(0, round(q * (len(times) - 1))))
+        return times[index]
+
+    disclaimer_count = (
+        await db.execute(select(func.count()).select_from(DisclaimerLog))
+    ).scalar_one()
+
+    return MetricsResponse(
+        classifier=classifier_info(),
+        runs={
+            "total": len(run_rows),
+            "completed": sum(1 for r in run_rows if r.status == "completed"),
+            "failed": sum(1 for r in run_rows if r.status == "failed"),
+            "active": sum(1 for r in run_rows if r.status in ("pending", "running")),
+            "p50_ms": percentile(completed_times, 0.50),
+            "p95_ms": percentile(completed_times, 0.95),
+        },
+        pipeline={
+            "provider": settings.DSPY_PROVIDER,
+            "model": settings.DSPY_MODEL,
+            "concurrency": settings.ANALYZE_CONCURRENCY,
+            "max_retries": settings.ANALYZE_MAX_RETRIES,
+        },
+        compliance={
+            "disclaimer_views_logged": disclaimer_count,
+        },
     )
 
 

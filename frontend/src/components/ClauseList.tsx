@@ -28,7 +28,7 @@ export default function ClauseList({ filename, clauses }: Props) {
         </p>
       </div>
 
-      <ul className="mt-3 max-h-[60vh] space-y-3 overflow-auto pr-2">
+      <ul className="mt-3 max-h-[60vh] space-y-3 overflow-auto pe-2">
         {clauses.map((clause) => (
           <li
             key={clause.parsed_clause_id ?? clause.clause_index}

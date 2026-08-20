@@ -60,6 +60,7 @@ from optimizer import load_optimized_analyzer
 from pain_points import detect_missing_protections
 from schemas import ClauseAnalysisResult, ClauseInput
 from scoring import compute_hybrid_risk_level
+from upl import sanitize
 
 logger = get_logger(__name__)
 
@@ -412,6 +413,7 @@ async def _execute_run(run_id: UUID, contract_id: UUID, *, force: bool) -> None:
 
         failed_ids: list[str] = []
         analyzed_count = 0
+        upl_rewrites = [0]        # boxed: mutated from per-clause closures
 
         if to_run:
             analyzer = await anyio.to_thread.run_sync(_build_analyzer)
@@ -425,6 +427,18 @@ async def _execute_run(run_id: UUID, contract_id: UUID, *, force: bool) -> None:
                 if result is None:
                     failed_ids.append(str(clause.parsed_clause_id))
                     return False
+
+                # UPL guardrail (AC-P02): prescriptive phrasing is rewritten
+                # to observational phrasing before anything is persisted.
+                sanitized = sanitize(result.plain_language_summary)
+                if sanitized.rewrites:
+                    result.plain_language_summary = sanitized.text
+                    upl_rewrites[0] += sanitized.rewrites
+                    logger.warning(
+                        "UPL filter rewrote %d prescriptive phrase(s) in clause %s.",
+                        sanitized.rewrites,
+                        clause.parsed_clause_id,
+                    )
 
                 # Layer 3: blend L1 confidence with the L2 output. db_writer
                 # applies the identical function when persisting, so response
@@ -449,6 +463,8 @@ async def _execute_run(run_id: UUID, contract_id: UUID, *, force: bool) -> None:
 
         succeeded_total = analyzed_count + len(cached)
         metadata_patch["analyzed_clauses"] = analyzed_count
+        if upl_rewrites[0]:
+            metadata_patch["upl_rewrites"] = upl_rewrites[0]
         if failed_ids:
             metadata_patch["failed_parsed_clause_ids"] = failed_ids
 
@@ -595,6 +611,7 @@ async def _contract_level_pass(contract_id: UUID, clauses: list[ClauseInput]) ->
                 return generate_executive_summary_blocking(digest)
 
             summary = await anyio.to_thread.run_sync(_summarize)
+            summary = sanitize(summary).text
 
         async with async_session_factory() as session:
             async with session.begin():

@@ -9,6 +9,7 @@ import {
   type ContractSummary,
   type DeleteResponse,
   type HealthResponse,
+  type MetricsResponse,
   type UploadResponse,
 } from "@/types/contracts";
 
@@ -176,6 +177,10 @@ export async function deleteContract(id: string): Promise<DeleteResponse> {
 
 export async function getHealth(): Promise<HealthResponse> {
   return request<HealthResponse>("/api/health");
+}
+
+export async function getMetrics(): Promise<MetricsResponse> {
+  return request<MetricsResponse>("/api/metrics");
 }
 
 // ---------------------------------------------------------------------------

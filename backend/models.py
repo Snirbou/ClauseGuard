@@ -167,6 +167,31 @@ class AnalysisRun(Base):
     run_metadata = Column("metadata", JSONB, nullable=True)
 
 
+class DisclaimerLog(Base):
+    """UPL audit trail (AC-X05): one row per disclaimer render.
+
+    The frontend fires a log request whenever a page showing the disclaimer
+    banner is viewed; the table proves the disclaimer display rate.
+    """
+
+    __tablename__ = "disclaimer_logs"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    # Nullable, no FK: the log must outlive the contract it was shown for.
+    contract_id = Column(UUID(as_uuid=True), nullable=True)
+    page = Column(String(256), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+        default=lambda: datetime.now(UTC),
+    )
+
+
 class ContractFinding(Base):
     """A contract-level finding — currently missing-protection detections.
 

@@ -151,6 +151,27 @@ class DeleteResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Compliance & metrics
+# ---------------------------------------------------------------------------
+
+class DisclaimerViewRequest(BaseModel):
+    """Body of POST /api/disclaimer-views (UPL audit trail, AC-X05)."""
+
+    page: str = Field(..., min_length=1, max_length=256)
+    contract_id: UUID | None = None
+
+
+class MetricsResponse(BaseModel):
+    """Evaluation dashboard payload (AcceptanceCriteria §4)."""
+
+    status: Literal["success"] = "success"
+    classifier: dict[str, Any]
+    runs: dict[str, Any]
+    pipeline: dict[str, Any]
+    compliance: dict[str, Any]
+
+
+# ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
 

@@ -6,6 +6,8 @@
  * layout and cannot be closed.
  */
 
+import DisclaimerLogger from "@/components/DisclaimerLogger";
+
 type Props = {
   /** `compact` is the always-on layout strip; `full` is the in-page callout. */
   variant?: "compact" | "full";
@@ -34,6 +36,8 @@ export default function DisclaimerBanner({ variant = "compact" }: Props) {
     >
       <span aria-hidden="true">⚠️ </span>
       {DISCLAIMER_TEXT}
+      {/* AC-X05: every render of this banner is logged server-side. */}
+      <DisclaimerLogger />
     </div>
   );
 }
