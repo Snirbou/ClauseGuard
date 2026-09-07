@@ -188,6 +188,8 @@ Interactive docs: <http://127.0.0.1:8000/docs>.
 
 ## Project documents
 
+- `docs/STATUS.md` — **start here**: what exists today, what remains, how
+  to verify, and the housekeeping that has been done.
 - `docs/ROADMAP.md` — the technical review this build executed, plus what's
   deliberately deferred (deployment, OCR, Hebrew/RTL, DSPy optimizer upgrade).
 - `PRD/` — product requirements, data model, acceptance criteria.
