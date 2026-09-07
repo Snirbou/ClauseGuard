@@ -46,8 +46,15 @@ jobs:
       - name: Ruff
         run: python -m ruff check .
 
-      - name: Unit tests
-        run: python -m pytest tests/ ml_training/tests/ -q
+      # The two test roots run separately: ml_inference/src and
+      # ml_training/src both expose top-level `src`/`features` modules and
+      # collide (4 collection errors) when pytest collects them together.
+      # This mirrors the verify-clauseguard skill exactly.
+      - name: Unit tests (api)
+        run: python -m pytest tests/ -q
+
+      - name: Unit tests (ml)
+        run: python -m pytest ml_training/tests/ -q
 
       - name: Migrations — fresh database from baseline
         env:

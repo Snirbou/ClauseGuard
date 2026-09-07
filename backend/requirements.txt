@@ -19,6 +19,12 @@ python-dotenv>=1.2.2
 # Used directly to offload blocking work (PyMuPDF, DSPy) off the event loop.
 anyio>=4.12.1
 
+# Schema migrations (database.init_db runs `alembic upgrade head` at startup).
+alembic>=1.19.1
+
+# Auth: Argon2id password hashing (auth.py).
+argon2-cffi>=25.1.0
+
 # DSPy pipeline (Developer 2)
 dspy-ai>=3.3.0
 openai>=2.33.0
