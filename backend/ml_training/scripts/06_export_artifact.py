@@ -8,6 +8,7 @@ the sidecar's `labels` matches the 8 CG8 literals at load time.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +21,8 @@ ML_TRAINING_DIR = Path(__file__).resolve().parents[1]
 ARTIFACTS_DIR = ML_TRAINING_DIR / "artifacts"
 PRODUCTION_DIR = REPO_ROOT / "backend" / "models"
 ARTIFACT_NAME = "clause_classifier_v1"
+# Pipeline whose meta is recorded in the sidecar (the one this export ran with).
+SPACY_MODEL_NAME = os.environ.get("SPACY_MODEL", "en_core_web_lg")
 
 
 def main() -> int:
@@ -61,7 +64,7 @@ def main() -> int:
     joblib.dump(pipeline, out_model)
 
     try:
-        spacy_model_meta = spacy.load("en_core_web_lg").meta
+        spacy_model_meta = spacy.load(SPACY_MODEL_NAME).meta
         spacy_model_version = spacy_model_meta.get("version", "unknown")
     except Exception:  # noqa: BLE001
         spacy_model_version = "unknown"
@@ -74,7 +77,7 @@ def main() -> int:
         "labels_match_expected": not (extra or missing),
         "sklearn_version": sklearn.__version__,
         "spacy_version": spacy.__version__,
-        "spacy_model": "en_core_web_lg",
+        "spacy_model": SPACY_MODEL_NAME,
         "spacy_model_version": spacy_model_version,
         "test_metrics": test_metrics,
     }

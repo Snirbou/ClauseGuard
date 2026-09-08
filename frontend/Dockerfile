@@ -22,7 +22,12 @@ RUN npm run build
 FROM node:22-alpine AS runner
 
 WORKDIR /app
-ENV NODE_ENV=production
+# Next's standalone server binds to $HOSTNAME, which Docker sets to the
+# container id unless overridden; listen on all interfaces. $PORT is
+# honoured too, so platforms that inject it (Railway) need no CMD change.
+ENV NODE_ENV=production \
+    HOSTNAME=0.0.0.0 \
+    PORT=3000
 
 # Next standalone output: server.js + the minimal node_modules subset.
 COPY --from=builder /app/.next/standalone ./

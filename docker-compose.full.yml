@@ -29,19 +29,23 @@ services:
   api:
     build:
       context: ./backend
-      # INSTALL_ML: "false" skips the 600MB spaCy model layer; the classifier
-      # then falls back to keyword rules.
+      # INSTALL_ML: "false" skips the spaCy model layer; the classifier then
+      # falls back to keyword rules. SPACY_MODEL picks the pipeline size.
       args:
         INSTALL_ML: "true"
+        SPACY_MODEL: ${SPACY_MODEL:-en_core_web_sm}
     container_name: clauseguard-api
     restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://clauseguard:clauseguard@db:5432/clauseguard
+      # Plain postgresql:// on purpose — exercises the same URL normalisation
+      # a managed host relies on (config.normalize_database_url).
+      DATABASE_URL: postgresql://clauseguard:clauseguard@db:5432/clauseguard
       OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-your-openai-api-key-here}
       DSPY_PROVIDER: ${DSPY_PROVIDER:-auto}
+      PORT: "8000"
     ports:
       - "8000:8000"
 

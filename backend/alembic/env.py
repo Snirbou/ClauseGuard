@@ -13,13 +13,16 @@ import models  # noqa: F401,E402  — imported for its table definitions
 from alembic import context
 
 # App imports resolve because alembic.ini sets prepend_sys_path to backend/.
-from config import settings  # noqa: E402
+from config import normalize_database_url, settings  # noqa: E402
 from database import Base  # noqa: E402
 
 config = context.config
 
 # Priority: explicit env override (CI / scratch databases) > backend/.env.
-_database_url = os.environ.get("ALEMBIC_DATABASE_URL") or settings.DATABASE_URL
+# The override is normalised too, so a raw postgres:// URL works here as well.
+_database_url = normalize_database_url(
+    os.environ.get("ALEMBIC_DATABASE_URL") or settings.DATABASE_URL
+)
 config.set_main_option("sqlalchemy.url", _database_url)
 
 target_metadata = Base.metadata

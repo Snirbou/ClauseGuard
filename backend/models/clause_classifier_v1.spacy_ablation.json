@@ -1,0 +1,48 @@
+{
+  "artifact": "clause_classifier_v1",
+  "trained_with_spacy_model": "en_core_web_lg",
+  "dataset": "coastalcph/lex_glue:ledgar",
+  "split": "test",
+  "n": 10000,
+  "low_confidence_threshold": 0.4,
+  "generated_at": "2026-09-08T11:51:34.146443+00:00",
+  "note": "Official LEDGAR test split (never used in training); absolute numbers differ from the training-time holdout (different split, no 'general' cap). Only the delta between spaCy pipelines matters here.",
+  "gate": 0.01,
+  "decision": {
+    "rule": "first model (in --models order) whose served macro-F1 is within 0.01 of en_core_web_lg",
+    "chosen": "en_core_web_sm",
+    "delta_vs_reference": 0.0011
+  },
+  "models": {
+    "en_core_web_sm": {
+      "spacy_version": "3.8.0",
+      "word_vectors": 0,
+      "raw_macro_f1": 0.879,
+      "served_macro_f1": 0.8801,
+      "delta_vs_lg": 0.0011,
+      "low_confidence_rate": 0.0029,
+      "ms_per_clause": 14.74,
+      "rss_mb": 328.2
+    },
+    "en_core_web_md": {
+      "spacy_version": "3.8.0",
+      "word_vectors": 684830,
+      "raw_macro_f1": 0.8796,
+      "served_macro_f1": 0.8808,
+      "delta_vs_lg": 0.0004,
+      "low_confidence_rate": 0.0022,
+      "ms_per_clause": 17.31,
+      "rss_mb": 527.4
+    },
+    "en_core_web_lg": {
+      "spacy_version": "3.8.0",
+      "word_vectors": 684830,
+      "raw_macro_f1": 0.8801,
+      "served_macro_f1": 0.8811,
+      "delta_vs_lg": 0.0,
+      "low_confidence_rate": 0.0021,
+      "ms_per_clause": 17.48,
+      "rss_mb": 902.2
+    }
+  }
+}

@@ -8,12 +8,13 @@ Safe to re-run; exits 0 if the model is already present.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
 import _path  # noqa: F401  side-effect: adds ml_training/ to sys.path
 
-MODEL_NAME = "en_core_web_lg"
+MODEL_NAME = os.environ.get("SPACY_MODEL", "en_core_web_lg")
 MODEL_VERSION = "3.7.1"
 
 

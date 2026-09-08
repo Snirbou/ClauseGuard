@@ -8,7 +8,7 @@ Full setup, architecture, API reference and configuration live in the
 ```powershell
 python -m venv venv
 venv\Scripts\pip install -r requirements.txt
-venv\Scripts\python -m spacy download en_core_web_lg   # optional, ~600MB
+venv\Scripts\python -m spacy download en_core_web_sm   # optional, ~12MB (SPACY_MODEL picks the pipeline)
 ```
 
 Without the spaCy model the trained classifier falls back to keyword rules
@@ -41,7 +41,7 @@ analysis runs, and warms the classifier. Interactive docs:
 ## Verify
 
 ```powershell
-venv\Scripts\python -m pytest tests\          # 94 unit tests
+venv\Scripts\python -m pytest tests\          # 117 unit tests
 venv\Scripts\python smoke_test.py             # 63 end-to-end checks (needs DB + server)
 venv\Scripts\python -m ruff check .
 ```

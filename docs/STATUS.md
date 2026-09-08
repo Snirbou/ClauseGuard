@@ -1,7 +1,7 @@
 # ClauseGuard — Project Status
 
-**As of:** 2026-09-07
-**Branch:** `main` (the only branch — see *Housekeeping* below)
+**As of:** 2026-09-08
+**Branch:** `main` (the only branch)
 **Verify anything on this page yourself:**
 
 ```bash
@@ -9,9 +9,9 @@ powershell -ExecutionPolicy Bypass -File .claude/skills/verify-clauseguard/run_c
 ```
 
 This is the "start here" document. `README.md` explains how to run the
-product; `docs/ROADMAP.md` is the technical review that drove the build. This
-file answers three questions: what exists, what remains, and what was cleaned
-up.
+product; `docs/DEPLOY.md` how to host it; `docs/ROADMAP.md` is the technical
+review that drove the build. This file answers three questions: what exists,
+what remains, and what future work must not rediscover.
 
 ---
 
@@ -32,56 +32,59 @@ no API key it runs in offline demo mode; pasting a real `OPENAI_API_KEY` into
 | Authentication: Argon2 passwords, httpOnly cookie sessions, per-user data isolation, rate limiting | ✅ |
 | UPL safeguards: non-dismissable disclaimer + audit log, prescriptive-language filter, progressive disclosure, Consult-a-Lawyer CTA | ✅ |
 | Evaluation dashboard (per-class F1, latency percentiles, compliance counters) | ✅ |
-| Alembic migrations (7 revisions), GitHub Actions CI, ruff, lockfile | ✅ |
+| Alembic migrations (7 revisions), GitHub Actions CI (lint, tests, migration drift, **image boot test**), ruff, lockfile | ✅ |
 | One-command verification skill (`verify-clauseguard`) | ✅ |
-| Docker images + full-stack `docker-compose.full.yml` | ✅ |
+| **Deploy-ready images**: reproducible lockfile install, pinned spaCy model layer, non-root, IPv4+IPv6 listener, `$PORT`, health that fails loudly (503), database retry at boot, Railway config-as-code (`backend/railway.json`, `frontend/railway.json`) and runbook (`docs/DEPLOY.md`) | ✅ |
+| **spaCy model-size ablation**: `en_core_web_sm` serves the classifier at a 0.001 macro-F1 cost vs `en_core_web_lg` (official LEDGAR test split, n=10 000) for a third of the memory — now the default | ✅ |
 
-### Verification evidence
+### Verification evidence (2026-09-08)
 
 | Check | Result |
 |---|---|
-| Backend unit tests (`pytest tests/`) | 102 passing |
+| Backend unit tests (`pytest tests/`) | 120 passing |
 | ML training tests (`pytest ml_training/tests/`) | 19 passing |
-| End-to-end smoke test (`smoke_test.py`, live API + DB) | 63 checks passing |
-| Frontend `tsc` / `eslint` / `next build` | clean, 8 routes |
+| End-to-end smoke test (`smoke_test.py`) against the full Docker stack — through the Next rewrite (`:3000`) **and** directly (`:8000`) | 63 + 63 checks passing |
+| Database stopped under the running API → `/api/health` | `503`, back to `200` when the database returns |
+| Container identity | `uid=10001(app)`, listening on `0.0.0.0` and `[::]` |
+| Frontend `tsc` / `eslint` / `next build` | clean |
 | Migration drift (`alembic check`) | none |
-| Full skill run on a fresh clone of `main` (2026-09-07) | **13 passed, 0 failed** |
+| spaCy ablation (`07_spacy_model_ablation.py`, sm / md / lg) | served macro-F1 0.8801 / 0.8808 / 0.8811; RSS 328 / 527 / 902 MB |
 
-**Latest full run (2026-09-07, fresh clone at `C:\Users\snirb\repos\ClauseGuard`):**
-`SUMMARY: 13 passed, 0 failed` — all four sections green. Docker was not
-running when the run started; the skill's own recovery path (`docker compose
-up -d` + retry) brought Postgres up and the run completed in full, so that
-branch of the skill is verified too.
-
-Two independent adversarial reviews were run against the build (a 5-dimension
-backend/security/data pass and a deep frontend-correctness pass). Every
-confirmed finding was fixed and regression-tested; **no critical or high
-defects remained**.
+Two independent adversarial reviews were run against the build earlier (a
+5-dimension backend/security/data pass and a deep frontend-correctness
+pass). Every confirmed finding was fixed and regression-tested.
 
 ---
 
-## 2. What remains
+## 2. What remains — the execution plan
 
-### The one thing only you can do
-- **Paste a real OpenAI key** into `backend/.env` (`OPENAI_API_KEY=sk-...`) and
-  restart the backend. `DSPY_PROVIDER=auto` detects it and switches from the
-  labeled demo analyzer to `gpt-4o-mini`. Then run `python smoke_test.py` once
-  more — with a real key it exercises the actual LLM path end to end.
+Phases run in this order (portfolio URL first). Each ends with the full
+verification set and one commit on `main`.
 
-### Deliberately deferred (not built — see `docs/ROADMAP.md` §4)
-| Item | Why deferred | Effort |
-|---|---|---|
-| Cloud deployment (API + Postgres on Railway/Fly/Render, web on Vercel) | needs your hosting accounts and secrets | 1–2 days |
-| DSPy optimizer upgrade (judge-based metric, 20+ examples, MIPROv2) | needs a real API key to run | 1 day |
-| OCR for scanned PDFs (`ocrmypdf` fallback) | needs the tesseract system dependency; today scanned PDFs fail with a clear error | ½ day |
-| Real-contract segmentation eval corpus (10 hand-annotated contracts) | needs real contracts; a synthetic corpus ships instead | ½ day + your contracts |
-| Hebrew / RTL end-to-end | post-MVP per PRD; the LEDGAR classifier won't transfer, RTL layout is pre-paid via logical CSS | large |
-| Risk precision/recall on the dashboard (AC-R05) | needs labeled risk data (CUAD/UNFAIR-ToS) | 1 day |
+| # | Phase | Gate | State |
+|---|---|---|---|
+| 1A | Deploy hardening (code) | — | ✅ done |
+| 1B | spaCy model-size experiment | — | ✅ done — `en_core_web_sm` |
+| 1C | Railway deployment (API + web + Postgres), CD on push | **you:** Railway project (see `docs/DEPLOY.md` §1) | ⏳ next |
+| 2 | Hebrew UI + RTL (Layer 1: Hebrew interface for English contracts; findings and API errors translated; LLM output stays English) | — | ⏳ |
+| 3 | Evaluation & dashboard completeness that needs no key: p99, readability (AC-P04), L1 confusion matrix, one annotation format for the real-contract corpus, segmentation boundary P/R gate, risk-eval scaffolding (AC-R05), DSPy program identity + optimizer history plumbing | **you:** ~10 anonymized contracts in `backend/eval/corpus/` (gitignored) | ⏳ |
+| 4 | Key-gated LLM work: real-path validation, optimizer upgrade (judge metric, 24+ examples, valset, before/after harness), AC-R05 end-to-end | **you:** `OPENAI_API_KEY` in `backend/.env` and on Railway + a spend cap | ⏳ |
+| 5 | OCR for scanned PDFs (Tesseract via PyMuPDF, page cap, inline) | — | ⏳ |
 
-### Housekeeping still needing the GitHub UI
-- **Protect `main`** (require PR + green CI). Cannot be done from the CLI here
-  (no `gh`); do it in *Settings → Branches*. Recommended now that the merge
-  flow is finished.
+### Only you can do these
+- **Create the Railway project** and paste the variables — the click-path is
+  `docs/DEPLOY.md` §1. Until a key exists the site runs the labeled demo
+  analyzer (`DSPY_PROVIDER=fake`); afterwards pin `openai`.
+- **Protect `main`** in GitHub → *Settings → Branches* (require PR + green
+  CI, including the new `api-image` job). Cannot be done from the CLI here.
+- **Provide the contracts** (Phase 3) and **the OpenAI key** (Phase 4) — the
+  key goes in `backend/.env` / Railway variables, never in chat.
+- **Review the Hebrew dictionary** (Phase 2) for tone and UPL-safe phrasing.
+
+### Explicitly deferred (not built)
+- Hebrew LLM output (needs Hebrew prescriptive patterns in `upl.py` first).
+- Hebrew *contracts* (Layer 2), multi-replica hosting, custom domain, async
+  extraction runs.
 
 ---
 
@@ -90,17 +93,12 @@ defects remained**.
 All of this is recoverable from git history; nothing was force-deleted.
 
 - **Branches consolidated.** `Snir-Phase-1`, `osher-step-1`, and
-  `osher-step-2` were each verified to be full ancestors of `main` (every
-  commit already merged) and then deleted from `origin` and locally. **`main`
-  is now the only branch** — everything lives in one place.
-- **Superseded documents removed:** `docs/raw/` (a raw AI chat dump and the
-  Step-1 developer handoff notes) and `docs/snapshots/` (three architecture
-  snapshots from March–May). They described the pre-integration system and
-  could mislead a reader; `README.md` + `docs/ROADMAP.md` are the current
-  truth. Recover any of them with `git show <commit>:<path>` if needed.
-- **Install logs untracked** (`pip.log`, `pip_install.log`, `npm_out.txt`)
-  and covered by `.gitignore`; build caches (`__pycache__`, `.pytest_cache`,
-  `.ruff_cache`, `tsconfig.tsbuildinfo`) cleared from disk — all are
+  `osher-step-2` were each verified to be full ancestors of `main` and then
+  deleted from `origin` and locally. **`main` is the only branch.**
+- **Superseded documents removed:** `docs/raw/` and `docs/snapshots/`
+  described the pre-integration system; `README.md` + `docs/ROADMAP.md` are
+  the current truth. Recover with `git show <commit>:<path>` if needed.
+- **Install logs untracked** and covered by `.gitignore`; build caches are
   gitignored and regenerate automatically.
 
 ---
@@ -113,9 +111,23 @@ Short versions; the README has the details.
 - `numpy` must import before `dspy`/`litellm`, or a later spaCy import
   crashes predict (`"data type 'bool' not understood"`). Pinned at the top of
   `main.py` and `classifier.py`.
-- The classifier artifact was trained on Python 3.11 / sklearn 1.5.2 and runs
-  here on 3.13 / newer sklearn; loading is validated with a smoke prediction
-  and falls back to keyword rules on failure.
+- The classifier artifact was trained on Python 3.11 / sklearn 1.5.2 /
+  `en_core_web_lg` and runs here on 3.13 / newer sklearn / `en_core_web_sm`;
+  loading is validated with a smoke prediction and falls back to keyword
+  rules on failure. `SPACY_MODEL` is read from the environment when the
+  pickle first imports `ml_inference/src/nlp_singleton.py`; `classifier.py`
+  exports the `backend/.env` value there before loading.
+- **`uvicorn --host ::` is IPv6-only** under asyncio (it sets
+  `IPV6_V6ONLY`), which silently breaks IPv4 clients such as Docker's port
+  proxy and compose. `backend/serve.py` binds both families explicitly —
+  Railway's private network needs IPv6, everything else needs IPv4.
+- **Next.js buffers the body of rewritten requests with a 10 MB cap** and
+  truncates silently; `experimental.proxyClientMaxBodySize: "12mb"` in
+  `next.config.ts` lets the API's own 10 MB limit answer with a proper 413.
+- **`requirements.lock.txt` must be regenerated when `requirements.txt`
+  changes.** The image installs from the lock; a dependency added only to
+  `requirements.txt` (this happened with `argon2-cffi`) crash-loops the
+  container while the dev venv keeps working.
 - The verification PowerShell script must stay **ASCII-only** (PS 5.1 reads
   `.ps1` as the system codepage without a BOM).
 - The two pytest roots (`tests/`, `ml_training/tests/`) must run **separately**

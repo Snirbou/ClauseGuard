@@ -13,11 +13,15 @@ the artifact.
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from typing import Any
 
 _NLP: Any | None = None
-_MODEL_NAME: str = "en_core_web_lg"
+# The trained artifact uses lemmas, NER labels, POS ratios and lengths — never
+# word vectors — so any en_core_web_* pipeline can serve it. SPACY_MODEL
+# selects which one; the Dockerfile and backend/.env.example expose it.
+_MODEL_NAME: str = os.environ.get("SPACY_MODEL", "en_core_web_lg")
 
 
 def get_nlp() -> Any:
@@ -29,7 +33,12 @@ def get_nlp() -> Any:
     return _NLP
 
 
-@lru_cache(maxsize=200_000)
+# Bounded: this process serves uploads for the lifetime of the container, so
+# an unbounded cache would grow by one spaCy Doc per unique clause forever.
+# 2k entries comfortably covers one upload's FeatureUnion double-pass (the
+# reason the cache exists) while capping memory. The training copy in
+# ml_training/src keeps the large cache — it re-parses 25k docs per run.
+@lru_cache(maxsize=2_048)
 def get_doc(text: str) -> Any:
     """Return a cached spaCy Doc for `text`. Reused by both feature branches."""
     return get_nlp()(text)

@@ -156,6 +156,8 @@ export type HealthResponse = {
   model: string;
   auto_analyze_on_upload: boolean;
   max_upload_mb: number;
+  /** Non-null when startup could not initialise the database (HTTP 503). */
+  startup_error?: string | null;
 };
 
 /** Payload of GET /api/metrics — the evaluation dashboard. */

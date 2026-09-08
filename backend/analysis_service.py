@@ -85,9 +85,9 @@ class AnalysisError(RuntimeError):
 class LLMNotConfiguredError(AnalysisError):
     def __init__(self) -> None:
         super().__init__(
-            "AI analysis is unavailable because no language model is configured. "
-            "Set a real OPENAI_API_KEY in backend/.env and restart the backend "
-            "(or set DSPY_PROVIDER=fake for offline demo mode).",
+            "AI analysis is unavailable because no language model is configured "
+            "on the server. The operator needs to set a real OPENAI_API_KEY "
+            "(or DSPY_PROVIDER=fake for offline demo mode) and restart the API.",
             status_code=503,
         )
 

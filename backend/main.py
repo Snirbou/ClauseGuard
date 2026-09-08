@@ -7,6 +7,7 @@ from __future__ import annotations
 # empirically verified fix (see docs/ROADMAP.md, Phase A).
 import numpy  # noqa: F401  isort: skip
 
+import asyncio
 from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import Any
@@ -85,23 +86,51 @@ _UPLOAD_CHUNK_BYTES = 1024 * 1024      # stream the upload 1 MB at a time
 
 
 # ---------------------------------------------------------------------------
-# Application lifespan — create tables on startup
+# Application lifespan — migrate the schema, recover runs, warm the model
 # ---------------------------------------------------------------------------
+
+_INIT_DB_ATTEMPTS = 6
+
+
+async def _init_db_with_retry(attempts: int = _INIT_DB_ATTEMPTS) -> str | None:
+    """Bring the schema to head, retrying while the database comes up.
+
+    On a fresh deploy Postgres and the API start together, so the first
+    connection attempts routinely fail; backing off for ~45s covers that.
+    Returns None on success, otherwise the final error text. The caller
+    records it and keeps serving /api/health, which reports it with a 503
+    (a platform health check then refuses to route traffic to the broken
+    instance instead of surfacing opaque errors to the frontend).
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            await init_db()
+            return None
+        except Exception as exc:
+            if attempt == attempts:
+                logger.error(
+                    "Could not initialise the database after %d attempts (%s). "
+                    "Is Postgres running? Locally: docker compose up -d",
+                    attempts,
+                    exc,
+                )
+                return f"{type(exc).__name__}: {exc}"
+            delay = min(2.0 ** attempt, 15.0)
+            logger.warning(
+                "Database not ready (attempt %d/%d: %s); retrying in %.0fs.",
+                attempt,
+                attempts,
+                exc,
+                delay,
+            )
+            await asyncio.sleep(delay)
+    return None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Create all tables and indexes when the app starts (dev convenience)."""
-    try:
-        await init_db()
-    except Exception as exc:
-        # Deliberately non-fatal: the app still serves /api/health, which
-        # reports database="unavailable". Refusing to boot would instead give
-        # the frontend an opaque connection error with no explanation.
-        logger.error(
-            "Could not initialise the database (%s). Is Postgres running? "
-            "Start it with: docker compose up -d",
-            exc,
-        )
+    """Migrate, recover stale runs, and warm the classifier at startup."""
+    app.state.startup_error = await _init_db_with_retry()
 
     if not settings.llm_configured:
         logger.warning(
@@ -111,10 +140,16 @@ async def lifespan(app: FastAPI):
 
     # Runs left pending/running by a previous process cannot still be
     # executing — surface them as failed so the user can simply re-run.
-    try:
-        await recover_stale_runs()
-    except Exception:
-        logger.exception("Stale-run recovery failed (continuing).")
+    if app.state.startup_error is None:
+        try:
+            await recover_stale_runs()
+        except Exception:
+            logger.exception("Stale-run recovery failed (continuing).")
+    else:
+        logger.warning(
+            "Skipping stale-run recovery: the database was unavailable at "
+            "startup. /api/health retries initialisation on demand."
+        )
 
     # Load the Layer 1 classifier off the event loop so the first upload is
     # not the request that pays the spaCy model load. Never fatal: on any
@@ -420,8 +455,44 @@ async def _require_contract(
 # Health
 # ---------------------------------------------------------------------------
 
+_startup_recovery_lock = asyncio.Lock()
+
+
+async def _try_recover_startup() -> None:
+    """The database answers now but initialisation failed at boot: run the
+    migrations once more so a long database outage at deploy time does not
+    require a manual restart. Serialised so concurrent health probes never
+    run Alembic twice."""
+    if getattr(app.state, "startup_error", None) is None:
+        return
+    if _startup_recovery_lock.locked():
+        return
+    async with _startup_recovery_lock:
+        if getattr(app.state, "startup_error", None) is None:
+            return
+        try:
+            await init_db()
+        except Exception as exc:
+            app.state.startup_error = f"{type(exc).__name__}: {exc}"
+            logger.error("Deferred database initialisation failed again: %s", exc)
+            return
+        app.state.startup_error = None
+        logger.info("Database initialised after a delayed start.")
+        try:
+            await recover_stale_runs()
+        except Exception:
+            logger.exception("Stale-run recovery failed (continuing).")
+
+
 @app.get("/api/health", response_model=HealthResponse)
-async def health(db: AsyncSession = Depends(get_db)) -> HealthResponse:
+async def health(
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> HealthResponse:
+    """Liveness + readiness in one. Answers **503** while the database is
+    unreachable or startup could not migrate it, so platform health checks
+    (Railway, docker HEALTHCHECK) treat the instance as unhealthy rather
+    than routing users to a backend that will fail every request."""
     try:
         await db.execute(text("SELECT 1"))
         database = "ok"
@@ -431,8 +502,17 @@ async def health(db: AsyncSession = Depends(get_db)) -> HealthResponse:
         # Leave the session usable for the rest of its (short) life.
         await db.rollback()
 
+    startup_error = getattr(app.state, "startup_error", None)
+    if database == "ok" and startup_error is not None:
+        await _try_recover_startup()
+        startup_error = getattr(app.state, "startup_error", None)
+
+    degraded = database != "ok" or startup_error is not None
+    if degraded:
+        response.status_code = 503
+
     return HealthResponse(
-        status="ok" if database == "ok" else "degraded",
+        status="degraded" if degraded else "ok",
         database=database,
         llm_configured=settings.llm_configured,
         provider=settings.resolved_provider,
@@ -440,6 +520,7 @@ async def health(db: AsyncSession = Depends(get_db)) -> HealthResponse:
         auto_analyze_on_upload=settings.AUTO_ANALYZE_ON_UPLOAD,
         max_upload_mb=settings.max_upload_mb,
         classifier=classifier_info(),
+        startup_error=startup_error,
     )
 
 

@@ -29,8 +29,8 @@ needed to switch to real AI analysis.
 | Authentication (Argon2 + httpOnly sessions) and per-user data isolation | ✅ |
 | UPL safeguards: non-dismissable disclaimer, audit log, prescriptive-language filter, progressive disclosure, Consult-a-Lawyer CTA | ✅ |
 | Evaluation dashboard (per-class F1, latency percentiles, compliance counters) | ✅ |
-| Alembic migrations, CI (lint + 94 unit tests + migration check), 63-check E2E smoke test | ✅ |
-| Dockerfiles + full-stack compose | ✅ |
+| Alembic migrations, CI (lint + 117 unit tests + migration drift check + image boot test), 63-check E2E smoke test | ✅ |
+| Dockerfiles + full-stack compose, Railway config (`docs/DEPLOY.md`) | ✅ |
 | Cloud deployment, OCR for scanned PDFs, Hebrew/RTL | ❌ future (see docs/ROADMAP.md) |
 
 ---
@@ -44,7 +44,7 @@ docker compose up -d
 # 2. Backend  (Python 3.13)
 cd backend
 python -m venv venv && venv/Scripts/pip install -r requirements.txt   # once
-python -m spacy download en_core_web_lg                               # once, ~600MB — optional*
+python -m spacy download en_core_web_sm                               # once, ~12MB — optional*
 venv/Scripts/python -m uvicorn main:app --port 8000
 
 # 3. Frontend

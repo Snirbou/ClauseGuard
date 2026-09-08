@@ -35,9 +35,10 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Install dependencies
-        # The spaCy language model (~600MB) is deliberately NOT installed:
+        # The spaCy language model is deliberately NOT installed here:
         # classifier.py detects the missing model and falls back to keyword
-        # rules, which is exactly the degradation path CI should exercise.
+        # rules, which is exactly the degradation path this job should
+        # exercise. The shipped ML path is covered by the api-image job.
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -62,6 +63,72 @@ jobs:
         run: |
           python -c "import asyncio; from database import init_db; asyncio.run(init_db())"
           python -c "import asyncio; from database import init_db; asyncio.run(init_db())"  # idempotent
+
+      - name: Migrations — no ORM/migration drift
+        env:
+          DATABASE_URL: postgresql+asyncpg://clauseguard:clauseguard@localhost:5432/clauseguard
+        run: python -m alembic check
+
+  api-image:
+    name: API image — build and boot with the trained model
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: clauseguard
+          POSTGRES_PASSWORD: clauseguard
+          POSTGRES_DB: clauseguard
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U clauseguard"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Exercises what the unit job deliberately skips: the lockfile install
+      # on Linux, the pinned spaCy model layer, the non-root user, the
+      # dual-stack bind and the $PORT contract — i.e. the image Railway runs.
+      - name: Build
+        run: docker build --build-arg INSTALL_ML=true -t clauseguard-api:ci ./backend
+
+      - name: Boot against Postgres using a raw postgres:// URL
+        # The raw scheme is on purpose: it is what managed hosts hand out and
+        # what config.normalize_database_url must turn into the asyncpg form.
+        run: |
+          docker run -d --name api --network host \
+            -e DATABASE_URL=postgres://clauseguard:clauseguard@localhost:5432/clauseguard \
+            -e DSPY_PROVIDER=fake \
+            -e PORT=8000 \
+            clauseguard-api:ci
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8000/api/health -o health.json; then break; fi
+            sleep 2
+          done
+          echo "--- /api/health"; cat health.json; echo
+          jq -e '.database == "ok" and .classifier.mode == "model"' health.json
+
+      - name: Health reports 503 once the database is gone
+        run: |
+          docker stop $(docker ps -q --filter "ancestor=postgres:16-alpine")
+          sleep 3
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/health)
+          echo "health -> HTTP $code"
+          test "$code" = "503"
+
+      - name: Container logs
+        if: always()
+        run: docker logs api 2>&1 | tail -n 60
+
+  web-image:
+    name: Web image — build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build --build-arg BACKEND_URL=http://api:8000 ./frontend
 
   frontend:
     name: Frontend — types, lint, build

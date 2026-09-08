@@ -13,11 +13,15 @@ the artifact.
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from typing import Any
 
 _NLP: Any | None = None
-_MODEL_NAME: str = "en_core_web_lg"
+# Mirrors ml_inference/src/nlp_singleton.py: SPACY_MODEL picks the pipeline.
+# Training defaults to the large model; the served model may be smaller (see
+# scripts/07_spacy_model_ablation.py for the measured F1 cost).
+_MODEL_NAME: str = os.environ.get("SPACY_MODEL", "en_core_web_lg")
 
 
 def get_nlp() -> Any:

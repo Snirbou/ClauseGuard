@@ -4,9 +4,30 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent
+
+
+def normalize_database_url(url: str) -> str:
+    """Rewrite a generic Postgres URL into SQLAlchemy's asyncpg form.
+
+    Managed hosts (Railway, Heroku-style plugins) hand out ``postgres://`` or
+    ``postgresql://``; SQLAlchemy needs ``postgresql+asyncpg://`` to select
+    the async driver. A ``sslmode=`` query parameter (present on Railway's
+    *public* connection string, absent on the private one) is renamed to
+    ``ssl=``, which is what the asyncpg dialect understands. URLs that are
+    already explicit pass through unchanged, so the function is idempotent.
+    """
+    value = (url or "").strip()
+    for prefix in ("postgres://", "postgresql://"):
+        if value.startswith(prefix):
+            value = "postgresql+asyncpg://" + value[len(prefix):]
+            break
+    if "sslmode=" in value:
+        value = value.replace("?sslmode=", "?ssl=").replace("&sslmode=", "&ssl=")
+    return value
 
 # Values that look like a key but are really the shipped placeholder from
 # .env.example.  Treating these as "configured" would send doomed requests to
@@ -35,6 +56,21 @@ class Settings(BaseSettings):
     DATABASE_URL: str = (
         "postgresql+asyncpg://clauseguard:clauseguard@localhost:5432/clauseguard"
     )
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def _normalize_database_url(cls, value: object) -> object:
+        return normalize_database_url(value) if isinstance(value, str) else value
+
+    # --- Layer 1 classifier -------------------------------------------------
+    # spaCy pipeline that serves the trained clause classifier. The artifact
+    # was trained with en_core_web_lg but never uses word vectors, and the
+    # ablation (ml_training/scripts/07_spacy_model_ablation.py, results in
+    # models/clause_classifier_v1.spacy_ablation.json) measured a 0.001
+    # macro-F1 cost for en_core_web_sm at a third of the memory — so the
+    # small model is the served default. classifier.py exports this into the
+    # environment before ml_inference/src/nlp_singleton.py reads it.
+    SPACY_MODEL: str = "en_core_web_sm"
 
     # --- LLM / DSPy -------------------------------------------------------
     OPENAI_API_KEY: str | None = None

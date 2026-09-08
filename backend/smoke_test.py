@@ -81,6 +81,12 @@ def build_pdf() -> bytes:
 
 
 def main() -> None:
+    # Windows consoles/pipes default to a legacy code page that cannot print
+    # the arrows in these messages; never let the report crash on output.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(description="ClauseGuard API smoke test")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--keep", action="store_true", help="Skip the delete step.")

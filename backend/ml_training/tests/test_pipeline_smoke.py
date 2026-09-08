@@ -6,6 +6,7 @@ from conftest replicated to give every class enough samples for inner CV.
 from __future__ import annotations
 
 import importlib.util
+import os
 
 import pytest
 
@@ -13,7 +14,7 @@ spacy_available = importlib.util.find_spec("spacy") is not None
 if spacy_available:
     try:
         import spacy
-        spacy.load("en_core_web_lg")
+        spacy.load(os.environ.get("SPACY_MODEL", "en_core_web_lg"))
         model_available = True
     except Exception:  # noqa: BLE001
         model_available = False
@@ -22,7 +23,7 @@ else:
 
 pytestmark = pytest.mark.skipif(
     not (spacy_available and model_available),
-    reason="spaCy or en_core_web_lg not installed",
+    reason="spaCy or the SPACY_MODEL pipeline (default en_core_web_lg) not installed",
 )
 
 

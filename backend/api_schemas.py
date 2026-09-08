@@ -201,3 +201,6 @@ class HealthResponse(BaseModel):
     # Layer 1 classifier status: mode ("model" | "mock"), artifact metadata
     # and test metrics when the trained pipeline is live.
     classifier: dict[str, Any] = Field(default_factory=dict)
+    # Set when the database could not be initialised at startup (migrations
+    # did not run). The endpoint answers 503 while this is non-null.
+    startup_error: str | None = None

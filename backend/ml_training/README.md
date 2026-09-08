@@ -50,7 +50,9 @@ cd backend/ml_training
 pytest tests/
 ```
 
-Tests requiring `en_core_web_lg` skip cleanly when the model is missing.
+Tests requiring the spaCy model skip cleanly when it is missing. The model
+name comes from `SPACY_MODEL` (default `en_core_web_lg`) in both the training
+sandbox and the served inference copy.
 
 ## Acceptance gates (enforced in `04_train.py`)
 

@@ -1,10 +1,29 @@
+# Keep the API image to the code it runs. ml_inference/ and models/ MUST stay:
+# the classifier pickle imports src.* from ml_inference at load time.
 venv/
 __pycache__/
-*.pyc
-.env
-pip.log
-pip_install.log
-ml_training/data_cache/
-ml_training/artifacts/
+*.py[cod]
 .pytest_cache/
 .ruff_cache/
+tests/
+ml_training/
+smoke_test.py
+eval/corpus/
+eval/results/l2_cache.jsonl
+
+# Secrets and local settings never enter the image; production values come
+# from the platform's environment.
+.env
+.env.*
+!.env.example
+
+# Build metadata / docs
+.dockerignore
+Dockerfile
+*.md
+.git
+.gitignore
+
+# Local install logs (untracked)
+pip.log
+pip_install.log

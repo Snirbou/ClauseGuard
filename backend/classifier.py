@@ -29,12 +29,14 @@ from __future__ import annotations
 import numpy  # noqa: F401  isort: skip
 
 import json
+import os
 import sys
 import threading
 import warnings
 from pathlib import Path
 from typing import Any
 
+from config import settings
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -55,6 +57,10 @@ _pipeline: Any | None = None
 _meta: dict[str, Any] = {}
 _mode: str = "unloaded"          # "unloaded" | "model" | "mock"
 _load_error: str | None = None
+# spaCy pipeline actually serving the model ({"name", "version"}), read from
+# nlp.meta after a successful load. May differ from the one used at training
+# time (metadata "spacy_model") — see SPACY_MODEL in config.py.
+_runtime_spacy: dict[str, str] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -122,11 +128,17 @@ def mock_classify(raw_text: str) -> tuple[str, float]:
 
 def _load_model() -> None:
     """Attempt to load and validate the trained artifact. Sets module state."""
-    global _pipeline, _meta, _mode, _load_error
+    global _pipeline, _meta, _mode, _load_error, _runtime_spacy
 
     try:
         if not _MODEL_PATH.exists():
             raise FileNotFoundError(f"artifact not found: {_MODEL_PATH.name}")
+
+        # ml_inference/src/nlp_singleton.py reads the model name from the
+        # process environment when the pickle first imports it; make the
+        # backend/.env setting visible there without overriding an explicit
+        # environment variable.
+        os.environ.setdefault("SPACY_MODEL", settings.SPACY_MODEL)
 
         if str(_INFERENCE_ROOT) not in sys.path:
             sys.path.insert(0, str(_INFERENCE_ROOT))
@@ -162,14 +174,31 @@ def _load_model() -> None:
         _meta = meta
         _mode = "model"
         _load_error = None
+
+        # Informational only: which spaCy pipeline the features are computed
+        # with in this process. Never fatal.
+        try:
+            from src.nlp_singleton import get_nlp  # resolved via _INFERENCE_ROOT
+
+            nlp_meta = get_nlp().meta
+            _runtime_spacy = {
+                "name": f"{nlp_meta.get('lang', '')}_{nlp_meta.get('name', '')}".strip("_"),
+                "version": str(nlp_meta.get("version", "unknown")),
+            }
+        except Exception:  # noqa: BLE001
+            _runtime_spacy = {}
+
         logger.info(
-            "Layer 1 classifier loaded: %s (macro-F1 %.3f, trained %s)",
+            "Layer 1 classifier loaded: %s (macro-F1 %.3f, trained %s, spaCy %s %s)",
             _MODEL_PATH.name,
             float(meta.get("test_metrics", {}).get("test_macro_f1", 0.0)),
             meta.get("trained_at_utc", "unknown"),
+            _runtime_spacy.get("name", "?"),
+            _runtime_spacy.get("version", "?"),
         )
     except Exception as exc:
         _pipeline = None
+        _runtime_spacy = {}
         _mode = "mock"
         _load_error = f"{type(exc).__name__}: {exc}"
         logger.warning(
@@ -234,9 +263,13 @@ def classifier_info() -> dict[str, Any]:
     info: dict[str, Any] = {
         "mode": _mode,
         "low_confidence_threshold": LOW_CONFIDENCE_THRESHOLD,
+        "spacy_model_configured": settings.SPACY_MODEL,
     }
     if _load_error:
         info["load_error"] = _load_error
+    if _runtime_spacy:
+        info["spacy_model_runtime"] = _runtime_spacy["name"]
+        info["spacy_model_version_runtime"] = _runtime_spacy["version"]
     if _meta:
         metrics = _meta.get("test_metrics", {})
         info.update(
@@ -247,6 +280,8 @@ def classifier_info() -> dict[str, Any]:
                 "per_class_f1": metrics.get("per_class_f1"),
                 "labels": _meta.get("labels"),
                 "sklearn_version_trained": _meta.get("sklearn_version"),
+                "spacy_model_trained": _meta.get("spacy_model"),
+                "spacy_model_version_trained": _meta.get("spacy_model_version"),
             }
         )
     return info
