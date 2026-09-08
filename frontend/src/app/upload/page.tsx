@@ -1,22 +1,23 @@
 import type { Metadata } from "next";
 import UploadDropzone from "@/components/UploadDropzone";
+import { getServerI18n } from "@/i18n/server";
 
-export const metadata: Metadata = {
-  title: "Upload a contract · ClauseGuard",
-  description: "Upload a freelance service agreement PDF for clause extraction and risk analysis.",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const { dict } = await getServerI18n();
+  return { title: dict.meta.upload.title, description: dict.meta.upload.description };
+}
 
-export default function UploadPage() {
+export default async function UploadPage() {
+  const { dict } = await getServerI18n();
+
   return (
     <div className="flex flex-col gap-6">
       <header>
         <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-          Upload a contract
+          {dict.upload.pageTitle}
         </h1>
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-          Your PDF is parsed into individual clauses and each one is classified.
-          Nothing is sent to the AI model until you start the analysis on the
-          next screen.
+          {dict.upload.pageLead}
         </p>
       </header>
 

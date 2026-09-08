@@ -66,6 +66,26 @@ from auth import (
     verify_password,
 )
 from classifier import classifier_info, classify, warm_up
+from error_codes import (
+    ANALYSIS_FAILED,
+    AUTH_EMAIL_TAKEN,
+    AUTH_INVALID_CREDENTIALS,
+    CONTRACT_DELETE_FAILED,
+    CONTRACT_NOT_FOUND,
+    INTERNAL_ERROR,
+    RUN_NOT_FOUND,
+    UPLOAD_EMPTY,
+    UPLOAD_INVALID_TYPE,
+    UPLOAD_NEEDS_OCR,
+    UPLOAD_NO_CLAUSES,
+    UPLOAD_PARSE_FAILED,
+    UPLOAD_PASSWORD_PROTECTED,
+    UPLOAD_PERSIST_FAILED,
+    UPLOAD_READ_FAILED,
+    UPLOAD_TOO_LARGE,
+    VALIDATION_ERROR,
+    CodedHTTPException,
+)
 from segmentation import extract_lines, segment_text
 from config import settings
 from database import get_db, init_db
@@ -176,7 +196,9 @@ app = FastAPI(
 # Error envelopes
 # ---------------------------------------------------------------------------
 
-def _upload_error_envelope(*, filename: str, detail: str) -> dict[str, Any]:
+def _upload_error_envelope(
+    *, filename: str, detail: str, code: str | None = None
+) -> dict[str, Any]:
     """The exact error envelope required by the Step 1 upload API contract."""
     return {
         "status": "error",
@@ -184,15 +206,28 @@ def _upload_error_envelope(*, filename: str, detail: str) -> dict[str, Any]:
         "contract_id": None,
         "parsed_clauses": [],
         "detail": detail,
+        **({"code": code} if code else {}),
     }
 
 
-def _error_envelope(detail: str) -> dict[str, Any]:
-    """Error envelope for every endpoint other than upload."""
-    return {"status": "error", "detail": detail}
+def _error_envelope(detail: str, code: str | None = None) -> dict[str, Any]:
+    """Error envelope for every endpoint other than upload.
+
+    ``code`` is additive (see error_codes.py): present only when the raising
+    site supplied one, so the shape older clients know is unchanged.
+    """
+    envelope: dict[str, Any] = {"status": "error", "detail": detail}
+    if code:
+        envelope["code"] = code
+    return envelope
 
 
-def _upload_http_error(filename: str, message: str, status_code: int = 400) -> HTTPException:
+def _upload_http_error(
+    filename: str,
+    message: str,
+    status_code: int = 400,
+    code: str | None = None,
+) -> HTTPException:
     """Build an HTTPException that the handler renders as the upload envelope.
 
     Encoding the filename in ``detail`` is how the upload route keeps its
@@ -200,7 +235,7 @@ def _upload_http_error(filename: str, message: str, status_code: int = 400) -> H
     """
     return HTTPException(
         status_code=status_code,
-        detail={"filename": filename, "message": message},
+        detail={"filename": filename, "message": message, "code": code},
     )
 
 
@@ -212,9 +247,10 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         content = _upload_error_envelope(
             filename=str(exc.detail.get("filename") or "uploaded.pdf"),
             detail=str(message) if message is not None else str(exc.detail),
+            code=exc.detail.get("code"),
         )
     else:
-        content = _error_envelope(str(exc.detail))
+        content = _error_envelope(str(exc.detail), code=getattr(exc, "code", None))
 
     return JSONResponse(
         status_code=exc.status_code,
@@ -240,7 +276,9 @@ async def validation_exception_handler(
 
     return JSONResponse(
         status_code=422,
-        content=_error_envelope("Invalid request. " + "; ".join(problems)),
+        content=_error_envelope(
+            "Invalid request. " + "; ".join(problems), code=VALIDATION_ERROR
+        ),
     )
 
 
@@ -262,7 +300,8 @@ class ErrorHandlingMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=500,
                 content=_error_envelope(
-                    "Internal server error. Check the backend log for details."
+                    "Internal server error. Check the backend log for details.",
+                    code=INTERNAL_ERROR,
                 ),
             )
 
@@ -306,6 +345,7 @@ async def _read_upload_limited(upload: UploadFile, filename: str) -> bytes:
         filename,
         f"File is too large. Maximum size is {settings.max_upload_mb:.0f} MB.",
         status_code=413,
+        code=UPLOAD_TOO_LARGE,
     )
 
     declared_size = getattr(upload, "size", None)
@@ -327,7 +367,9 @@ async def _read_upload_limited(upload: UploadFile, filename: str) -> bytes:
         raise
     except Exception:
         logger.exception("Failed to read uploaded file %s", filename)
-        raise _upload_http_error(filename, "Failed to read uploaded file.") from None
+        raise _upload_http_error(
+            filename, "Failed to read uploaded file.", code=UPLOAD_READ_FAILED
+        ) from None
 
     return b"".join(chunks)
 
@@ -344,7 +386,9 @@ def _extract_and_classify(raw_bytes: bytes, filename: str) -> list[dict[str, Any
 
         if doc.needs_pass:
             raise _upload_http_error(
-                filename, "This PDF is password protected and cannot be read."
+                filename,
+                "This PDF is password protected and cannot be read.",
+                code=UPLOAD_PASSWORD_PROTECTED,
             )
 
         page_texts: list[str] = []
@@ -360,7 +404,9 @@ def _extract_and_classify(raw_bytes: bytes, filename: str) -> list[dict[str, Any
         raise
     except Exception:
         logger.exception("Failed to parse PDF %s", filename)
-        raise _upload_http_error(filename, "Failed to parse PDF.") from None
+        raise _upload_http_error(
+            filename, "Failed to parse PDF.", code=UPLOAD_PARSE_FAILED
+        ) from None
     finally:
         # fitz documents hold an open handle on the stream buffer.
         if doc is not None:
@@ -372,6 +418,7 @@ def _extract_and_classify(raw_bytes: bytes, filename: str) -> list[dict[str, Any
             filename,
             "Could not extract text from PDF. It may be a scanned image, "
             "which needs OCR.",
+            code=UPLOAD_NEEDS_OCR,
         )
 
     segments = segment_text(full_text, layout_lines)
@@ -394,7 +441,9 @@ def _extract_and_classify(raw_bytes: bytes, filename: str) -> list[dict[str, Any
         clause_index += 1
 
     if not classified:
-        raise _upload_http_error(filename, "No clauses could be extracted from this PDF.")
+        raise _upload_http_error(
+            filename, "No clauses could be extracted from this PDF.", code=UPLOAD_NO_CLAUSES
+        )
 
     return classified
 
@@ -447,7 +496,9 @@ async def _require_contract(
     contract exists but belongs to someone else."""
     contract = await db.get(Contract, contract_id)
     if contract is None or contract.user_id != user.id:
-        raise HTTPException(status_code=404, detail="Contract not found.")
+        raise CodedHTTPException(
+            status_code=404, detail="Contract not found.", code=CONTRACT_NOT_FOUND
+        )
     return contract
 
 
@@ -540,14 +591,17 @@ async def register(
     email = body.email.strip().lower()
     problem = validate_credentials_format(email, body.password)
     if problem:
-        raise HTTPException(status_code=400, detail=problem)
+        message, code = problem
+        raise CodedHTTPException(status_code=400, detail=message, code=code)
 
     existing = (
         await db.execute(select(User).where(User.email == email))
     ).scalars().first()
     if existing is not None:
-        raise HTTPException(
-            status_code=409, detail="An account with this email already exists."
+        raise CodedHTTPException(
+            status_code=409,
+            detail="An account with this email already exists.",
+            code=AUTH_EMAIL_TAKEN,
         )
 
     user = User(email=email, password_hash=hash_password(body.password))
@@ -580,9 +634,13 @@ async def login(
     # when the email is unknown) is a measurable account-enumeration oracle.
     if user is None:
         dummy_verify(body.password)
-        raise HTTPException(status_code=401, detail="Incorrect email or password.")
+        raise CodedHTTPException(
+            status_code=401, detail="Incorrect email or password.", code=AUTH_INVALID_CREDENTIALS
+        )
     if not verify_password(user.password_hash, body.password):
-        raise HTTPException(status_code=401, detail="Incorrect email or password.")
+        raise CodedHTTPException(
+            status_code=401, detail="Incorrect email or password.", code=AUTH_INVALID_CREDENTIALS
+        )
 
     token = await create_session(db, user.id)
     set_session_cookie(response, token)
@@ -708,11 +766,13 @@ async def upload_contract(
     filename = file.filename or "uploaded.pdf"
 
     if not _is_pdf_upload(file):
-        raise _upload_http_error(filename, "Invalid file type. PDF required.")
+        raise _upload_http_error(
+            filename, "Invalid file type. PDF required.", code=UPLOAD_INVALID_TYPE
+        )
 
     raw_bytes = await _read_upload_limited(file, filename)
     if not raw_bytes:
-        raise _upload_http_error(filename, "Empty file.")
+        raise _upload_http_error(filename, "Empty file.", code=UPLOAD_EMPTY)
 
     classified = await anyio.to_thread.run_sync(
         _extract_and_classify, raw_bytes, filename
@@ -746,6 +806,7 @@ async def upload_contract(
             filename,
             "Failed to save the contract to the database.",
             status_code=500,
+            code=UPLOAD_PERSIST_FAILED,
         ) from None
 
     # --- Build handoff response (contract fields must not change) ---
@@ -784,12 +845,13 @@ async def _auto_analyze(db: AsyncSession, contract_id: UUID) -> dict[str, Any]:
         run = await start_analysis(db, contract_id)
     except AnalysisError as exc:
         logger.warning("Auto-analysis skipped for %s: %s", contract_id, exc.message)
-        return {"status": "skipped", "detail": exc.message}
+        return {"status": "skipped", "detail": exc.message, "code": exc.code}
     except Exception:
         logger.exception("Auto-analysis crashed for contract %s", contract_id)
         return {
             "status": "skipped",
             "detail": "Automatic analysis failed to start. Try again from the contract page.",
+            "code": INTERNAL_ERROR,
         }
 
     return {"status": "started", "run_id": str(run.id)}
@@ -950,7 +1012,9 @@ async def analyze(
     try:
         run = await start_analysis(db, contract_id, force=force)
     except AnalysisError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        raise CodedHTTPException(
+            status_code=exc.status_code, detail=exc.message, code=exc.code or ANALYSIS_FAILED
+        ) from exc
 
     if wait:
         await wait_for_run(run.id)
@@ -967,7 +1031,9 @@ async def get_analysis_run(
 ) -> AnalysisRunResponse:
     run = await get_run(db, run_id)
     if run is None:
-        raise HTTPException(status_code=404, detail="Analysis run not found.")
+        raise CodedHTTPException(
+            status_code=404, detail="Analysis run not found.", code=RUN_NOT_FOUND
+        )
     await _require_contract(db, run.contract_id, user)
     return AnalysisRunResponse(run=_to_run_info(run))
 
@@ -1001,9 +1067,13 @@ async def delete_contract(
     except Exception:
         await db.rollback()
         logger.exception("Failed to delete contract %s", contract_id)
-        raise HTTPException(status_code=500, detail="Failed to delete the contract.") from None
+        raise CodedHTTPException(
+            status_code=500, detail="Failed to delete the contract.", code=CONTRACT_DELETE_FAILED
+        ) from None
 
     if deleted_rows == 0:
-        raise HTTPException(status_code=404, detail="Contract not found.")
+        raise CodedHTTPException(
+            status_code=404, detail="Contract not found.", code=CONTRACT_NOT_FOUND
+        )
 
     return DeleteResponse(contract_id=contract_id)

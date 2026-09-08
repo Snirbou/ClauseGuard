@@ -2,7 +2,7 @@
 
 import type { ParsedClause } from "@/types/contracts";
 import ClauseTypeTag from "@/components/ClauseTypeTag";
-import { pluralize } from "@/lib/format";
+import { useI18n } from "@/i18n/I18nProvider";
 
 type Props = {
   filename: string;
@@ -14,17 +14,21 @@ type Props = {
  * Risk analysis has not run at this point — that lives on the detail page.
  */
 export default function ClauseList({ filename, clauses }: Props) {
+  const { dict } = useI18n();
+
   return (
     <div className="w-full">
       <div className="flex items-baseline justify-between gap-4">
         <div>
           <h2 className="text-sm font-semibold text-zinc-700 dark:text-zinc-200">
-            Parsed clauses
+            {dict.upload.parsedClauses}
           </h2>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">{filename}</p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            <span dir="ltr">{filename}</span>
+          </p>
         </div>
         <p className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">
-          {clauses.length} {pluralize(clauses.length, "clause")}
+          {dict.common.clauses(clauses.length)}
         </p>
       </div>
 
@@ -43,7 +47,12 @@ export default function ClauseList({ filename, clauses }: Props) {
                 confidence={clause.clause_type_confidence}
               />
             </div>
-            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-zinc-800 dark:text-zinc-100">
+            {/* Contract text is never translated: it stays in the contract's language. */}
+            <p
+              dir="ltr"
+              lang="en"
+              className="whitespace-pre-wrap break-words text-start text-sm leading-relaxed text-zinc-800 dark:text-zinc-100"
+            >
               {clause.raw_text}
             </p>
           </li>

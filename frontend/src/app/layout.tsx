@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Heebo } from "next/font/google";
 import "./globals.css";
 import Header from "@/components/Header";
 import DisclaimerBanner from "@/components/DisclaimerBanner";
 import Providers from "@/components/Providers";
+import { getServerI18n } from "@/i18n/server";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -15,24 +16,37 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-export const metadata: Metadata = {
-  title: "ClauseGuard — Understand your contracts before you sign",
-  description:
-    "Upload a freelance service agreement and get a plain-language, clause-by-clause risk breakdown. Educational analysis, not legal advice.",
-};
+// Hebrew-capable face for the RTL locale; Geist has no Hebrew subset.
+const heebo = Heebo({
+  variable: "--font-heebo",
+  subsets: ["hebrew", "latin"],
+});
 
-export default function RootLayout({
+export async function generateMetadata(): Promise<Metadata> {
+  const { dict } = await getServerI18n();
+  return { title: dict.meta.siteTitle, description: dict.meta.siteDescription };
+}
+
+/**
+ * The locale is resolved here once per request (cookie → Accept-Language →
+ * English) and flows down as `<html lang dir>` plus the I18n context. Reading
+ * cookies makes every route dynamic, which is fine for a Node-hosted app.
+ */
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const { locale, dict, rtl } = await getServerI18n();
+
   return (
     <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      lang={locale}
+      dir={rtl ? "rtl" : "ltr"}
+      className={`${geistSans.variable} ${geistMono.variable} ${heebo.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col bg-zinc-50 text-zinc-900 dark:bg-black dark:text-zinc-50">
-        <Providers>
+        <Providers locale={locale}>
           {/* Non-dismissable by design — see DisclaimerBanner. */}
           <DisclaimerBanner />
           <Header />
@@ -41,7 +55,7 @@ export default function RootLayout({
           </main>
         </Providers>
         <footer className="border-t border-zinc-200 px-4 py-6 text-center text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-          ClauseGuard · Educational, pattern-based contract analysis · Not a law firm
+          {dict.footer}
         </footer>
       </body>
     </html>

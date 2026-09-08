@@ -5,6 +5,7 @@ import type { ClauseDetail } from "@/types/contracts";
 import ClauseTypeTag from "@/components/ClauseTypeTag";
 import ConsultLawyerCta from "@/components/ConsultLawyerCta";
 import RiskBadge from "@/components/RiskBadge";
+import { useI18n } from "@/i18n/I18nProvider";
 
 /** Unanalyzed clause text longer than this is truncated behind the toggle. */
 const COLLAPSE_THRESHOLD = 400;
@@ -21,8 +22,12 @@ type Props = {
  * itemized risk factors sit behind an explicit "Show details" toggle. The
  * Consult-a-Lawyer CTA for high-risk clauses stays outside the collapse —
  * AC-X03 requires it visible whenever the clause is rated high.
+ *
+ * Clause text, the summary and the risk factors are LLM/contract output and
+ * stay English in every locale, so they render in explicit `dir="ltr"` blocks.
  */
 export default function ClauseCard({ clause }: Props) {
+  const { dict } = useI18n();
   const [expanded, setExpanded] = useState(false);
 
   const analyzed = clause.risk_level !== null;
@@ -40,7 +45,10 @@ export default function ClauseCard({ clause }: Props) {
     return (
       <li className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:p-5">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="font-mono text-xs font-semibold text-zinc-500 dark:text-zinc-400">
+          <span
+            className="font-mono text-xs font-semibold text-zinc-500 dark:text-zinc-400"
+            dir="ltr"
+          >
             #{clause.clause_index}
           </span>
           <ClauseTypeTag
@@ -51,7 +59,11 @@ export default function ClauseCard({ clause }: Props) {
             <RiskBadge level={null} />
           </span>
         </div>
-        <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-zinc-800 dark:text-zinc-100">
+        <p
+          className="mt-3 whitespace-pre-wrap break-words text-start text-sm leading-relaxed text-zinc-800 dark:text-zinc-100"
+          dir="ltr"
+          lang="en"
+        >
           {visibleText}
         </p>
         {isLong ? (
@@ -61,11 +73,11 @@ export default function ClauseCard({ clause }: Props) {
             aria-expanded={expanded}
             className="mt-2 text-xs font-semibold text-zinc-600 underline underline-offset-2 transition-colors hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
           >
-            {expanded ? "Show less" : "Show full text"}
+            {expanded ? dict.clause.showLess : dict.clause.showFullText}
           </button>
         ) : null}
         <p className="mt-4 border-t border-zinc-200 pt-4 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-          This clause has not been analyzed yet.
+          {dict.clause.notAnalyzedYet}
         </p>
       </li>
     );
@@ -74,7 +86,10 @@ export default function ClauseCard({ clause }: Props) {
   return (
     <li className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:p-5">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-xs font-semibold text-zinc-500 dark:text-zinc-400">
+        <span
+          className="font-mono text-xs font-semibold text-zinc-500 dark:text-zinc-400"
+          dir="ltr"
+        >
           #{clause.clause_index}
         </span>
         <ClauseTypeTag
@@ -90,9 +105,13 @@ export default function ClauseCard({ clause }: Props) {
       {clause.plain_language_summary ? (
         <div className="mt-3">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-            What this means
+            {dict.clause.whatThisMeans}
           </h3>
-          <p className="mt-1.5 text-sm leading-relaxed text-zinc-800 dark:text-zinc-100">
+          <p
+            className="mt-1.5 text-start text-sm leading-relaxed text-zinc-800 dark:text-zinc-100"
+            dir="ltr"
+            lang="en"
+          >
             {clause.plain_language_summary}
           </p>
         </div>
@@ -105,8 +124,10 @@ export default function ClauseCard({ clause }: Props) {
         aria-controls={detailsId}
         className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-zinc-600 underline underline-offset-2 transition-colors hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
       >
-        <span aria-hidden="true">{expanded ? "▾" : "▸"}</span>
-        {expanded ? "Hide details" : "Show details — clause text & risk factors"}
+        <span aria-hidden="true" className="inline-block rtl:-scale-x-100">
+          {expanded ? "▾" : "▸"}
+        </span>
+        {expanded ? dict.clause.hideDetails : dict.clause.showDetails}
       </button>
 
       {expanded ? (
@@ -116,30 +137,35 @@ export default function ClauseCard({ clause }: Props) {
         >
           {clause.risk_percentile !== null && clause.risk_percentile > 0 ? (
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              Scored higher risk than {clause.risk_percentile}% of the clauses
-              in this contract.
+              {dict.clause.percentile(clause.risk_percentile)}
             </p>
           ) : null}
 
           <div>
             <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-              Clause text
+              {dict.clause.clauseText}
             </h3>
-            <p className="mt-1.5 whitespace-pre-wrap break-words text-sm leading-relaxed text-zinc-800 dark:text-zinc-100">
+            <p
+              className="mt-1.5 whitespace-pre-wrap break-words text-start text-sm leading-relaxed text-zinc-800 dark:text-zinc-100"
+              dir="ltr"
+              lang="en"
+            >
               {clause.raw_text}
             </p>
           </div>
 
           <div>
             <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-              Risk factors
+              {dict.clause.riskFactors}
             </h3>
             {clause.risk_factors.length > 0 ? (
               <ul className="mt-1.5 flex flex-col gap-1.5">
                 {clause.risk_factors.map((factor, index) => (
                   <li
                     key={`${clause.parsed_clause_id}-factor-${index}`}
-                    className="flex gap-2 text-sm leading-relaxed text-zinc-700 dark:text-zinc-300"
+                    className="flex gap-2 text-start text-sm leading-relaxed text-zinc-700 dark:text-zinc-300"
+                    dir="ltr"
+                    lang="en"
                   >
                     <span aria-hidden="true" className="text-zinc-400">
                       •
@@ -150,7 +176,7 @@ export default function ClauseCard({ clause }: Props) {
               </ul>
             ) : (
               <p className="mt-1.5 text-sm text-zinc-500 dark:text-zinc-400">
-                No specific risk factors identified.
+                {dict.clause.noFactors}
               </p>
             )}
           </div>

@@ -27,11 +27,18 @@ export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
  */
 export class ApiError extends Error {
   readonly status: number;
+  /**
+   * Stable error code — from the backend envelope (backend/error_codes.py)
+   * or one of the client-side codes below — so the UI can render the
+   * message in the visitor's language. Undefined when the server sent none.
+   */
+  readonly code: string | undefined;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.code = code;
   }
 
   get isNetworkError(): boolean {
@@ -40,8 +47,15 @@ export class ApiError extends Error {
 }
 
 const NETWORK_ERROR_MESSAGE =
-  "Could not reach the ClauseGuard API. Make sure the backend is running on " +
-  `${API_BASE_URL}.`;
+  "Could not reach the ClauseGuard API. Make sure the backend is running" +
+  (API_BASE_URL ? ` on ${API_BASE_URL}.` : ".");
+
+/** Client-side error codes (the backend's live in backend/error_codes.py). */
+export const CLIENT_ERROR_CODES = {
+  network: "network",
+  badResponse: "bad_response",
+  httpError: "http_error",
+} as const;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
@@ -52,22 +66,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init,
     });
   } catch {
-    throw new ApiError(NETWORK_ERROR_MESSAGE, 0);
+    throw new ApiError(NETWORK_ERROR_MESSAGE, 0, CLIENT_ERROR_CODES.network);
   }
 
   const body: unknown =
     res.status === 204 ? undefined : await res.json().catch(() => null);
 
   if (!res.ok) {
-    const detail = (body as ApiErrorResponse | null)?.detail;
+    const envelope = body as ApiErrorResponse | null;
+    const detail = envelope?.detail;
     throw new ApiError(
       detail ?? `Request failed with status ${res.status}.`,
       res.status,
+      envelope?.code ?? (detail ? undefined : CLIENT_ERROR_CODES.httpError),
     );
   }
 
   if (res.status !== 204 && body === null) {
-    throw new ApiError("The backend returned a response we could not read.", res.status);
+    throw new ApiError(
+      "The backend returned a response we could not read.",
+      res.status,
+      CLIENT_ERROR_CODES.badResponse,
+    );
   }
 
   return body as T;
@@ -94,6 +114,7 @@ export async function uploadContractFile(file: File): Promise<UploadResponse> {
       detail: `File is too large (${formatBytes(file.size)}). Maximum size is ${formatBytes(
         MAX_UPLOAD_BYTES,
       )}.`,
+      code: "upload.too_large",
     };
   }
 
@@ -104,6 +125,7 @@ export async function uploadContractFile(file: File): Promise<UploadResponse> {
       contract_id: null,
       parsed_clauses: [],
       detail: "This file is empty.",
+      code: "upload.empty",
     };
   }
 
@@ -123,6 +145,7 @@ export async function uploadContractFile(file: File): Promise<UploadResponse> {
       contract_id: null,
       parsed_clauses: [],
       detail: NETWORK_ERROR_MESSAGE,
+      code: CLIENT_ERROR_CODES.network,
     };
   }
 
@@ -135,6 +158,7 @@ export async function uploadContractFile(file: File): Promise<UploadResponse> {
     contract_id: null,
     parsed_clauses: [],
     detail: "Invalid response from backend.",
+    code: CLIENT_ERROR_CODES.badResponse,
   };
 }
 

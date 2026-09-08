@@ -2,11 +2,12 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import AuthForm from "@/components/AuthForm";
 import LoadingSpinner from "@/components/LoadingSpinner";
+import { getServerI18n } from "@/i18n/server";
 
-export const metadata: Metadata = {
-  title: "Sign in · ClauseGuard",
-  description: "Sign in to your ClauseGuard account.",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const { dict } = await getServerI18n();
+  return { title: dict.meta.login.title, description: dict.meta.login.description };
+}
 
 export default function LoginPage() {
   return (

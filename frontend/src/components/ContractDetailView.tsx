@@ -17,17 +17,14 @@ import ErrorMessage from "@/components/ErrorMessage";
 import FindingsSection from "@/components/FindingsSection";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import RiskSummary from "@/components/RiskSummary";
+import { apiErrorMessage } from "@/i18n";
+import { useI18n } from "@/i18n/I18nProvider";
 import { useRedirectOnAuthError } from "@/lib/useSession";
-import { formatDateTime, pluralize } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 
 type Filter = "all" | RiskLevel;
 
-const FILTERS: { key: Filter; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "high", label: "🔴 High" },
-  { key: "medium", label: "🟡 Medium" },
-  { key: "low", label: "🟢 Low" },
-];
+const FILTERS: readonly Filter[] = ["all", "high", "medium", "low"];
 
 const POLL_INTERVAL_MS = 1200;
 
@@ -35,11 +32,8 @@ function isActiveRun(run: AnalysisRun | null | undefined): boolean {
   return run?.status === "pending" || run?.status === "running";
 }
 
-function errorText(err: unknown, fallback: string): string {
-  return err instanceof ApiError ? err.message : fallback;
-}
-
 function AnalysisProgress({ run }: { run: AnalysisRun }) {
+  const { dict } = useI18n();
   const total = run.clause_count ?? 0;
   const done = run.completed_clauses;
   const percent = total > 0 ? Math.round((done / total) * 100) : 5;
@@ -49,7 +43,7 @@ function AnalysisProgress({ run }: { run: AnalysisRun }) {
       <div className="flex items-center justify-between gap-3 text-sm">
         <span className="flex items-center gap-2 font-semibold">
           <LoadingSpinner size="sm" />
-          Analyzing clauses…
+          {dict.detail.progressTitle}
         </span>
         <span className="font-mono text-xs text-zinc-500 dark:text-zinc-400">
           {done}/{total}
@@ -61,7 +55,7 @@ function AnalysisProgress({ run }: { run: AnalysisRun }) {
         aria-valuemin={0}
         aria-valuemax={total}
         aria-valuenow={done}
-        aria-label="Clauses analyzed"
+        aria-label={dict.detail.progressAria}
       >
         <div
           className="h-full rounded-full bg-zinc-900 transition-all duration-500 dark:bg-zinc-100"
@@ -69,8 +63,7 @@ function AnalysisProgress({ run }: { run: AnalysisRun }) {
         />
       </div>
       <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-        Results appear below as each clause finishes. You can leave this page —
-        the analysis keeps running on the server.
+        {dict.detail.progressHint}
       </p>
     </div>
   );
@@ -79,6 +72,7 @@ function AnalysisProgress({ run }: { run: AnalysisRun }) {
 export default function ContractDetailView({ contractId }: { contractId: string }) {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { dict, intl } = useI18n();
 
   const [filter, setFilter] = useState<Filter>("all");
   const [deleting, setDeleting] = useState(false);
@@ -116,10 +110,7 @@ export default function ContractDetailView({ contractId }: { contractId: string 
   const onDelete = useCallback(async () => {
     if (!contract) return;
     const confirmed = window.confirm(
-      `Delete "${contract.original_filename}"?\n\nThis permanently removes the contract, its ${contract.clause_count} ${pluralize(
-        contract.clause_count,
-        "clause",
-      )} and any analysis. This cannot be undone.`,
+      dict.contracts.confirmDelete(contract.original_filename, contract.clause_count),
     );
     if (!confirmed) return;
 
@@ -131,12 +122,10 @@ export default function ContractDetailView({ contractId }: { contractId: string 
       router.push("/contracts");
     } catch (err) {
       // Previously swallowed — the user confirmed a delete and saw nothing.
-      setDeleteError(
-        err instanceof ApiError ? err.message : "Could not delete the contract.",
-      );
+      setDeleteError(apiErrorMessage(dict, err, dict.contracts.deleteFailed));
       setDeleting(false);
     }
-  }, [contract, contractId, queryClient, router]);
+  }, [contract, contractId, dict, queryClient, router]);
 
   const visibleClauses = useMemo(
     () =>
@@ -147,22 +136,22 @@ export default function ContractDetailView({ contractId }: { contractId: string 
   );
 
   if (detailQuery.isPending) {
-    return <LoadingSpinner block label="Loading contract…" />;
+    return <LoadingSpinner block label={dict.detail.loading} />;
   }
 
   if (detailQuery.isError || !contract) {
     return (
       <div className="flex flex-col gap-4">
         <ErrorMessage
-          title="Could not load this contract"
-          message={errorText(detailQuery.error, "Could not load this contract.")}
+          title={dict.detail.loadFailedTitle}
+          message={apiErrorMessage(dict, detailQuery.error, dict.detail.loadFailed)}
           onRetry={() => void detailQuery.refetch()}
         />
         <Link
           href="/contracts"
           className="text-sm font-semibold text-zinc-600 underline underline-offset-2 dark:text-zinc-400"
         >
-          ← Back to all contracts
+          {dict.detail.backToAll}
         </Link>
       </div>
     );
@@ -177,21 +166,24 @@ export default function ContractDetailView({ contractId }: { contractId: string 
           href="/contracts"
           className="text-sm font-medium text-zinc-600 transition-colors hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
-          ← All contracts
+          {dict.detail.allContracts}
         </Link>
       </div>
 
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="break-words text-2xl font-semibold tracking-tight sm:text-3xl">
+          <h1
+            className="break-words text-2xl font-semibold tracking-tight sm:text-3xl"
+            dir="ltr"
+          >
             {contract.original_filename}
           </h1>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-            Uploaded {formatDateTime(contract.created_at)} ·{" "}
-            {contract.clause_count} {pluralize(contract.clause_count, "clause")} ·{" "}
+            {dict.detail.uploaded(formatDateTime(contract.created_at, intl))} ·{" "}
+            {dict.common.clauses(contract.clause_count)} ·{" "}
             {contract.has_analysis
-              ? `${contract.analyzed_clause_count} analyzed`
-              : "not analyzed yet"}
+              ? dict.detail.analyzedCount(contract.analyzed_clause_count)
+              : dict.detail.notAnalyzedYet}
           </p>
         </div>
 
@@ -205,12 +197,12 @@ export default function ContractDetailView({ contractId }: { contractId: string 
             {analyzing ? (
               <>
                 <LoadingSpinner size="sm" />
-                Analyzing…
+                {dict.detail.analyzing}
               </>
             ) : contract.has_analysis ? (
-              "Re-run analysis"
+              dict.detail.rerun
             ) : (
-              "Analyze contract"
+              dict.detail.analyze
             )}
           </button>
 
@@ -220,7 +212,7 @@ export default function ContractDetailView({ contractId }: { contractId: string 
             disabled={analyzing || deleting}
             className="inline-flex items-center justify-center rounded-lg border border-zinc-300 px-3 py-2 text-sm font-semibold text-zinc-600 transition-colors hover:border-red-400 hover:bg-red-500/10 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-red-400"
           >
-            {deleting ? "Deleting…" : "Delete"}
+            {deleting ? dict.common.deleting : dict.common.delete}
           </button>
         </div>
       </header>
@@ -230,17 +222,17 @@ export default function ContractDetailView({ contractId }: { contractId: string 
       {analyzeMutation.isError &&
       !(analyzeMutation.error instanceof ApiError && analyzeMutation.error.status === 409) ? (
         <ErrorMessage
-          title="Could not start the analysis"
-          message={errorText(analyzeMutation.error, "Analysis failed to start.")}
+          title={dict.detail.startFailedTitle}
+          message={apiErrorMessage(dict, analyzeMutation.error, dict.detail.startFailed)}
         />
       ) : null}
 
       {deleteError ? (
-        <ErrorMessage title="Could not delete the contract" message={deleteError} />
+        <ErrorMessage title={dict.detail.deleteFailedTitle} message={deleteError} />
       ) : null}
 
       {failedRun?.error_message && !analyzing ? (
-        <ErrorMessage title="Last analysis run failed" message={failedRun.error_message} />
+        <ErrorMessage title={dict.detail.lastRunFailedTitle} message={failedRun.error_message} />
       ) : null}
 
       {activeRun ? <AnalysisProgress run={activeRun} /> : null}
@@ -252,13 +244,18 @@ export default function ContractDetailView({ contractId }: { contractId: string 
 
       {contract.analysis_summary ? (
         <section
-          aria-label="Executive summary"
+          aria-label={dict.detail.executiveSummary}
           className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950"
         >
           <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-            Executive summary
+            {dict.detail.executiveSummary}
           </h2>
-          <p className="mt-2 text-sm leading-relaxed text-zinc-800 dark:text-zinc-100">
+          {/* LLM output stays in the language of the contract (English). */}
+          <p
+            className="mt-2 text-start text-sm leading-relaxed text-zinc-800 dark:text-zinc-100"
+            dir="ltr"
+            lang="en"
+          >
             {contract.analysis_summary}
           </p>
         </section>
@@ -273,39 +270,43 @@ export default function ContractDetailView({ contractId }: { contractId: string 
           <p className="text-2xl" aria-hidden="true">
             🤖
           </p>
-          <h2 className="mt-2 font-semibold">No analysis yet</h2>
+          <h2 className="mt-2 font-semibold">{dict.detail.noAnalysisTitle}</h2>
           <p className="mx-auto mt-1 max-w-md text-sm text-zinc-600 dark:text-zinc-400">
-            Clauses have been extracted and classified. Run the analysis to get
-            a plain-language summary and risk assessment for each one.
+            {dict.detail.noAnalysisBody}
           </p>
         </div>
       ) : null}
 
       <section className="flex flex-col gap-4">
+        {/* Non-English locales only: the clauses below stay in English. */}
+        {dict.detail.englishNote ? (
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">{dict.detail.englishNote}</p>
+        ) : null}
+
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold tracking-tight">Clauses</h2>
+          <h2 className="text-lg font-semibold tracking-tight">{dict.detail.clausesTitle}</h2>
 
           {contract.has_analysis ? (
             <div
               className="flex flex-wrap items-center gap-1"
               role="group"
-              aria-label="Filter by risk level"
+              aria-label={dict.detail.filterAria}
             >
-              {FILTERS.map((option) => {
-                const active = filter === option.key;
+              {FILTERS.map((key) => {
+                const active = filter === key;
                 return (
                   <button
-                    key={option.key}
+                    key={key}
                     type="button"
                     aria-pressed={active}
-                    onClick={() => setFilter(option.key)}
+                    onClick={() => setFilter(key)}
                     className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
                       active
                         ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
                         : "border border-zinc-300 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900"
                     }`}
                   >
-                    {option.label}
+                    {dict.detail.filters[key]}
                   </button>
                 );
               })}
@@ -315,7 +316,7 @@ export default function ContractDetailView({ contractId }: { contractId: string 
 
         {visibleClauses.length === 0 ? (
           <p className="rounded-xl border border-dashed border-zinc-300 px-4 py-8 text-center text-sm text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">
-            No clauses match this filter.
+            {dict.detail.noMatch}
           </p>
         ) : (
           <ul className="flex flex-col gap-4">

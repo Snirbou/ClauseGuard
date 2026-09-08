@@ -2,8 +2,16 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
+import I18nProvider from "@/i18n/I18nProvider";
+import type { Locale } from "@/i18n";
 
-export default function Providers({ children }: { children: React.ReactNode }) {
+export default function Providers({
+  locale,
+  children,
+}: {
+  locale: Locale;
+  children: React.ReactNode;
+}) {
   // useState (not a module singleton) so each browser tab/render tree gets
   // its own client and nothing leaks across requests during SSR.
   const [queryClient] = useState(
@@ -21,5 +29,9 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       }),
   );
 
-  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  return (
+    <QueryClientProvider client={queryClient}>
+      <I18nProvider locale={locale}>{children}</I18nProvider>
+    </QueryClientProvider>
+  );
 }

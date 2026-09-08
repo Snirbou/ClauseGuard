@@ -1,10 +1,14 @@
 import type { Metadata } from "next";
 import ContractDetailView from "@/components/ContractDetailView";
+import { getServerI18n } from "@/i18n/server";
 
-export const metadata: Metadata = {
-  title: "Contract analysis · ClauseGuard",
-  description: "Clause-by-clause risk analysis for an uploaded contract.",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const { dict } = await getServerI18n();
+  return {
+    title: dict.meta.contractDetail.title,
+    description: dict.meta.contractDetail.description,
+  };
+}
 
 /**
  * `params` is a Promise in Next.js 16 — synchronous access was removed.

@@ -1,3 +1,6 @@
+"use client";
+
+import { useI18n } from "@/i18n/I18nProvider";
 import { clauseTypeLabel, formatConfidence } from "@/lib/format";
 
 /** One colour per classifier category, so a clause type is recognisable at a glance. */
@@ -20,19 +23,16 @@ type Props = {
 };
 
 export default function ClauseTypeTag({ clauseType, confidence }: Props) {
+  const { dict } = useI18n();
   const style = (clauseType && TYPE_STYLES[clauseType]) || DEFAULT_STYLE;
   const confidenceText = formatConfidence(confidence ?? null);
 
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${style}`}
-      title={
-        confidenceText
-          ? `Classifier confidence: ${confidenceText}`
-          : undefined
-      }
+      title={confidenceText ? dict.clause.confidenceTitle(confidenceText) : undefined}
     >
-      <span>{clauseTypeLabel(clauseType)}</span>
+      <span>{clauseTypeLabel(dict, clauseType)}</span>
       {confidenceText ? (
         <span className="font-mono font-normal opacity-70">{confidenceText}</span>
       ) : null}

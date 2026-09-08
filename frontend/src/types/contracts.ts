@@ -23,7 +23,7 @@ export type ParsedClause = {
 /** Present on upload responses only when AUTO_ANALYZE_ON_UPLOAD is enabled. */
 export type UploadAnalysisInfo =
   | { status: "started"; run_id: string }
-  | { status: "skipped"; detail: string };
+  | { status: "skipped"; detail: string; code?: string };
 
 export type UploadSuccessResponse = {
   status: "success";
@@ -39,6 +39,8 @@ export type UploadErrorResponse = {
   contract_id: string | null;
   parsed_clauses: ParsedClause[];
   detail?: string;
+  /** Stable error code (backend/error_codes.py) for localized messages. */
+  code?: string;
 };
 
 export type UploadResponse = UploadSuccessResponse | UploadErrorResponse;
@@ -204,4 +206,6 @@ export type UserInfo = {
 export type ApiErrorResponse = {
   status: "error";
   detail?: string;
+  /** Stable error code (backend/error_codes.py) for localized messages. */
+  code?: string;
 };

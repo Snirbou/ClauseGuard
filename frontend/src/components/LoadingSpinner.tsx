@@ -1,3 +1,7 @@
+"use client";
+
+import { useI18n } from "@/i18n/I18nProvider";
+
 type Props = {
   label?: string;
   size?: "sm" | "md" | "lg";
@@ -12,11 +16,12 @@ const SIZES = {
 } as const;
 
 export default function LoadingSpinner({ label, size = "md", block = false }: Props) {
+  const { dict } = useI18n();
   const spinner = (
     <span
       className={`inline-block animate-spin rounded-full border-zinc-300 border-t-zinc-900 dark:border-zinc-700 dark:border-t-zinc-100 ${SIZES[size]}`}
       role="status"
-      aria-label={label ?? "Loading"}
+      aria-label={label ?? dict.common.loading}
     />
   );
 

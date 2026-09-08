@@ -1,23 +1,22 @@
 import type { Metadata } from "next";
 import DashboardView from "@/components/DashboardView";
+import { getServerI18n } from "@/i18n/server";
 
-export const metadata: Metadata = {
-  title: "Evaluation dashboard · ClauseGuard",
-  description:
-    "Model quality, pipeline latency, and UPL compliance metrics for the ClauseGuard analysis pipeline.",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const { dict } = await getServerI18n();
+  return { title: dict.meta.dashboard.title, description: dict.meta.dashboard.description };
+}
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  const { dict } = await getServerI18n();
+  const t = dict.dashboard;
+
   return (
     <div className="flex flex-col gap-6">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-          Evaluation dashboard
-        </h1>
+        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">{t.pageTitle}</h1>
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-          Live quality and health metrics for the three-layer analysis
-          pipeline: classifier F1 per clause type, run latency, and the UPL
-          compliance audit trail.
+          {t.pageLead}
         </p>
       </header>
 

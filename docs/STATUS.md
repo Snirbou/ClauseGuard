@@ -36,17 +36,19 @@ no API key it runs in offline demo mode; pasting a real `OPENAI_API_KEY` into
 | One-command verification skill (`verify-clauseguard`) | ✅ |
 | **Deploy-ready images**: reproducible lockfile install, pinned spaCy model layer, non-root, IPv4+IPv6 listener, `$PORT`, health that fails loudly (503), database retry at boot, Railway config-as-code (`backend/railway.json`, `frontend/railway.json`) and runbook (`docs/DEPLOY.md`) | ✅ |
 | **spaCy model-size ablation**: `en_core_web_sm` serves the classifier at a 0.001 macro-F1 cost vs `en_core_web_lg` (official LEDGAR test split, n=10 000) for a third of the memory — now the default | ✅ |
+| **Hebrew UI + RTL (Layer 1)**: cookie-based EN/HE switch, `<html lang dir>` from the root layout, Heebo font, typed dictionaries (`frontend/src/i18n`), Hebrew findings and localized API errors via stable error codes (`backend/error_codes.py`); contract text and AI output stay English and render as isolated LTR blocks | ✅ |
 
 ### Verification evidence (2026-09-08)
 
 | Check | Result |
 |---|---|
-| Backend unit tests (`pytest tests/`) | 120 passing |
+| Backend unit tests (`pytest tests/`) | 127 passing |
 | ML training tests (`pytest ml_training/tests/`) | 19 passing |
 | End-to-end smoke test (`smoke_test.py`) against the full Docker stack — through the Next rewrite (`:3000`) **and** directly (`:8000`) | 63 + 63 checks passing |
 | Database stopped under the running API → `/api/health` | `503`, back to `200` when the database returns |
 | Container identity | `uid=10001(app)`, listening on `0.0.0.0` and `[::]` |
-| Frontend `tsc` / `eslint` / `next build` | clean |
+| Frontend `tsc` / `eslint` / `next build` | clean (dictionary parity is type-checked) |
+| Hebrew/RTL live check (dev server + browser) | `lang=he dir=rtl`, Heebo applied, he-IL dates, English clause/summary blocks LTR, mirrored disclosure glyph, no horizontal overflow at 375 px |
 | Migration drift (`alembic check`) | none |
 | spaCy ablation (`07_spacy_model_ablation.py`, sm / md / lg) | served macro-F1 0.8801 / 0.8808 / 0.8811; RSS 328 / 527 / 902 MB |
 
@@ -66,7 +68,7 @@ verification set and one commit on `main`.
 | 1A | Deploy hardening (code) | — | ✅ done |
 | 1B | spaCy model-size experiment | — | ✅ done — `en_core_web_sm` |
 | 1C | Railway deployment (API + web + Postgres), CD on push | **you:** Railway project (see `docs/DEPLOY.md` §1) | ⏳ next |
-| 2 | Hebrew UI + RTL (Layer 1: Hebrew interface for English contracts; findings and API errors translated; LLM output stays English) | — | ⏳ |
+| 2 | Hebrew UI + RTL (Layer 1: Hebrew interface for English contracts; findings and API errors translated; LLM output stays English) | — | ✅ done |
 | 3 | Evaluation & dashboard completeness that needs no key: p99, readability (AC-P04), L1 confusion matrix, one annotation format for the real-contract corpus, segmentation boundary P/R gate, risk-eval scaffolding (AC-R05), DSPy program identity + optimizer history plumbing | **you:** ~10 anonymized contracts in `backend/eval/corpus/` (gitignored) | ⏳ |
 | 4 | Key-gated LLM work: real-path validation, optimizer upgrade (judge metric, 24+ examples, valset, before/after harness), AC-R05 end-to-end | **you:** `OPENAI_API_KEY` in `backend/.env` and on Railway + a spend cap | ⏳ |
 | 5 | OCR for scanned PDFs (Tesseract via PyMuPDF, page cap, inline) | — | ⏳ |

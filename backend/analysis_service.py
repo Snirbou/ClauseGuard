@@ -55,6 +55,12 @@ from contract_summary import (
 from database import async_session_factory
 from db_writer import save_result_to_db
 from dspy_pipeline import configure_lm, process_clauses
+from error_codes import (
+    ANALYSIS_FAILED,
+    ANALYSIS_IN_PROGRESS,
+    ANALYSIS_LLM_NOT_CONFIGURED,
+    ANALYSIS_NO_CLAUSES,
+)
 from fake_llm import FakeAnalyzer
 from logger import get_logger
 from models import AnalysisRun, Contract, ContractFinding, ParsedClause, RiskScore
@@ -74,12 +80,16 @@ ACTIVE_STATUSES = ("pending", "running")
 # ---------------------------------------------------------------------------
 
 class AnalysisError(RuntimeError):
-    """Raised when analysis cannot start/complete. Carries an HTTP status."""
+    """Raised when analysis cannot start/complete. Carries an HTTP status and
+    a stable error code (error_codes.py) for localized rendering."""
 
-    def __init__(self, message: str, status_code: int = 502) -> None:
+    def __init__(
+        self, message: str, status_code: int = 502, code: str = ANALYSIS_FAILED
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
+        self.code = code
 
 
 class LLMNotConfiguredError(AnalysisError):
@@ -89,6 +99,7 @@ class LLMNotConfiguredError(AnalysisError):
             "on the server. The operator needs to set a real OPENAI_API_KEY "
             "(or DSPY_PROVIDER=fake for offline demo mode) and restart the API.",
             status_code=503,
+            code=ANALYSIS_LLM_NOT_CONFIGURED,
         )
 
 
@@ -97,6 +108,7 @@ class AnalysisInProgressError(AnalysisError):
         super().__init__(
             "Analysis is already running for this contract. Wait for it to finish.",
             status_code=409,
+            code=ANALYSIS_IN_PROGRESS,
         )
 
 
@@ -276,6 +288,7 @@ async def start_analysis(
         raise AnalysisError(
             "This contract has no parsed clauses to analyze.",
             status_code=400,
+            code=ANALYSIS_NO_CLAUSES,
         )
 
     # The in-process guard fast-paths the common case; the partial unique

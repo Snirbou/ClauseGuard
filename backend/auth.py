@@ -26,12 +26,20 @@ from datetime import UTC, datetime, timedelta
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from fastapi import Depends, HTTPException, Request, Response
+from fastapi import Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database import get_db
+from error_codes import (
+    AUTH_INVALID_EMAIL,
+    AUTH_PASSWORD_TOO_SHORT,
+    AUTH_SESSION_EXPIRED,
+    AUTH_SIGN_IN_REQUIRED,
+    RATE_LIMITED,
+    CodedHTTPException,
+)
 from logger import get_logger
 from models import Session, User
 
@@ -78,12 +86,15 @@ def dummy_verify(candidate: str) -> None:
         pass
 
 
-def validate_credentials_format(email: str, password: str) -> str | None:
-    """Return a human-readable problem, or None when the format is fine."""
+def validate_credentials_format(email: str, password: str) -> tuple[str, str] | None:
+    """Return ``(human-readable problem, error code)``, or None when fine."""
     if not _EMAIL_RE.match(email or ""):
-        return "Enter a valid email address."
+        return "Enter a valid email address.", AUTH_INVALID_EMAIL
     if len(password or "") < MIN_PASSWORD_LENGTH:
-        return f"Password must be at least {MIN_PASSWORD_LENGTH} characters."
+        return (
+            f"Password must be at least {MIN_PASSWORD_LENGTH} characters.",
+            AUTH_PASSWORD_TOO_SHORT,
+        )
     return None
 
 
@@ -157,10 +168,16 @@ async def get_current_user(
     """Require a live session. 401 with the standard error envelope otherwise."""
     token = request.cookies.get(SESSION_COOKIE)
     if not token:
-        raise HTTPException(status_code=401, detail="Sign in to continue.")
+        raise CodedHTTPException(
+            status_code=401, detail="Sign in to continue.", code=AUTH_SIGN_IN_REQUIRED
+        )
     user = await resolve_session(db, token)
     if user is None:
-        raise HTTPException(status_code=401, detail="Your session has expired. Sign in again.")
+        raise CodedHTTPException(
+            status_code=401,
+            detail="Your session has expired. Sign in again.",
+            code=AUTH_SESSION_EXPIRED,
+        )
     return user
 
 
@@ -215,9 +232,10 @@ def enforce_rate_limit(
     while window and now - window[0] > window_seconds:
         window.popleft()
     if len(window) >= max_attempts:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=429,
             detail="Too many attempts. Wait a minute and try again.",
+            code=RATE_LIMITED,
         )
     window.append(now)
 

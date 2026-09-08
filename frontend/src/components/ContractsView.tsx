@@ -4,18 +4,16 @@ import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import type { ContractSummary } from "@/types/contracts";
-import { ApiError, deleteContract, getContracts } from "@/lib/api";
+import { deleteContract, getContracts } from "@/lib/api";
 import ContractCard from "@/components/ContractCard";
 import ErrorMessage from "@/components/ErrorMessage";
 import LoadingSpinner from "@/components/LoadingSpinner";
+import { apiErrorMessage } from "@/i18n";
+import { useI18n } from "@/i18n/I18nProvider";
 import { useRedirectOnAuthError } from "@/lib/useSession";
-import { pluralize } from "@/lib/format";
-
-function errorText(err: unknown, fallback: string): string {
-  return err instanceof ApiError ? err.message : fallback;
-}
 
 export default function ContractsView() {
+  const { dict } = useI18n();
   const queryClient = useQueryClient();
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
@@ -39,27 +37,24 @@ export default function ContractsView() {
   const onDelete = useCallback(
     (contract: ContractSummary) => {
       const confirmed = window.confirm(
-        `Delete "${contract.original_filename}"?\n\nThis permanently removes the contract, its ${contract.clause_count} ${pluralize(
-          contract.clause_count,
-          "clause",
-        )} and any analysis. This cannot be undone.`,
+        dict.contracts.confirmDelete(contract.original_filename, contract.clause_count),
       );
       if (!confirmed) return;
       setDeletingId(contract.id);
       deleteMutation.mutate(contract.id);
     },
-    [deleteMutation],
+    [deleteMutation, dict],
   );
 
   if (contractsQuery.isPending) {
-    return <LoadingSpinner block label="Loading your contracts…" />;
+    return <LoadingSpinner block label={dict.contracts.loading} />;
   }
 
   if (contractsQuery.isError) {
     return (
       <ErrorMessage
-        title="Could not load contracts"
-        message={errorText(contractsQuery.error, "Could not load your contracts.")}
+        title={dict.contracts.loadFailedTitle}
+        message={apiErrorMessage(dict, contractsQuery.error, dict.contracts.loadFailed)}
         onRetry={() => void contractsQuery.refetch()}
       />
     );
@@ -73,16 +68,15 @@ export default function ContractsView() {
         <p className="text-3xl" aria-hidden="true">
           📂
         </p>
-        <h2 className="mt-3 font-semibold">No contracts yet</h2>
+        <h2 className="mt-3 font-semibold">{dict.contracts.emptyTitle}</h2>
         <p className="mx-auto mt-1 max-w-sm text-sm text-zinc-600 dark:text-zinc-400">
-          Upload a freelance service agreement to get a clause-by-clause
-          breakdown.
+          {dict.contracts.emptyBody}
         </p>
         <Link
           href="/upload"
           className="mt-5 inline-flex items-center justify-center rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
         >
-          Upload your first contract
+          {dict.contracts.emptyCta}
         </Link>
       </div>
     );
@@ -94,7 +88,7 @@ export default function ContractsView() {
           than replacing the whole list. */}
       {deleteMutation.isError ? (
         <ErrorMessage
-          message={errorText(deleteMutation.error, "Could not delete the contract.")}
+          message={apiErrorMessage(dict, deleteMutation.error, dict.contracts.deleteFailed)}
         />
       ) : null}
 

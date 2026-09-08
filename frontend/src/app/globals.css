@@ -24,3 +24,11 @@ body {
      in layout.tsx. */
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
+
+/* Hebrew locale: Geist has no Hebrew glyphs, so the whole page switches to
+   Heebo (loaded in layout.tsx). Latin runs inside Hebrew pages — filenames,
+   clause text — render in Heebo's Latin subset, which is designed to sit
+   next to its Hebrew. */
+html[lang="he"] body {
+  font-family: var(--font-heebo), var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}

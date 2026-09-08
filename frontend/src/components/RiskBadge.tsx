@@ -1,4 +1,7 @@
+"use client";
+
 import type { RiskLevel } from "@/types/contracts";
+import { useI18n } from "@/i18n/I18nProvider";
 import { RISK_EMOJI, formatRiskScore, riskLevelLabel } from "@/lib/format";
 
 const LEVEL_STYLES: Record<RiskLevel, string> = {
@@ -18,6 +21,7 @@ type Props = {
 };
 
 export default function RiskBadge({ level, score, size = "md" }: Props) {
+  const { dict } = useI18n();
   const style = level ? LEVEL_STYLES[level] : UNANALYZED_STYLE;
   const sizing = size === "sm" ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-xs";
   const scoreText = formatRiskScore(score ?? null);
@@ -27,7 +31,7 @@ export default function RiskBadge({ level, score, size = "md" }: Props) {
       className={`inline-flex items-center gap-1.5 rounded-full border font-semibold ${sizing} ${style}`}
     >
       {level ? <span aria-hidden="true">{RISK_EMOJI[level]}</span> : null}
-      <span>{riskLevelLabel(level)}</span>
+      <span className="uppercase">{riskLevelLabel(dict, level)}</span>
       {scoreText ? (
         <span className="font-mono font-normal opacity-70">{scoreText}</span>
       ) : null}

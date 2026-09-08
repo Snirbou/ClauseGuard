@@ -29,9 +29,10 @@ needed to switch to real AI analysis.
 | Authentication (Argon2 + httpOnly sessions) and per-user data isolation | ✅ |
 | UPL safeguards: non-dismissable disclaimer, audit log, prescriptive-language filter, progressive disclosure, Consult-a-Lawyer CTA | ✅ |
 | Evaluation dashboard (per-class F1, latency percentiles, compliance counters) | ✅ |
-| Alembic migrations, CI (lint + 117 unit tests + migration drift check + image boot test), 63-check E2E smoke test | ✅ |
+| Alembic migrations, CI (lint + 127 unit tests + migration drift check + image boot test), 63-check E2E smoke test | ✅ |
 | Dockerfiles + full-stack compose, Railway config (`docs/DEPLOY.md`) | ✅ |
-| Cloud deployment, OCR for scanned PDFs, Hebrew/RTL | ❌ future (see docs/ROADMAP.md) |
+| **Hebrew UI + RTL** — Layer 1: a Hebrew interface (cookie-based EN/HE switch, no URL prefix) for English contracts; findings and API errors translated, contract text and AI output stay English | ✅ |
+| Cloud deployment (Railway project pending), OCR for scanned PDFs, Hebrew AI output | ❌ future (see docs/STATUS.md) |
 
 ---
 
@@ -138,6 +139,10 @@ re-analyzing a contract costs nothing.
 | `GET` | `/api/metrics` | auth; dashboard data |
 | `POST` | `/api/disclaimer-views` | open, rate-limited; untrusted contract_id dropped |
 
+Every error response carries the English `detail` plus, where the raising
+site supplies one, a stable machine-readable `code` (`backend/error_codes.py`,
+frozen by a test) that the frontend maps to the visitor's language.
+
 Interactive docs: <http://127.0.0.1:8000/docs>.
 
 ## Frontend routes
@@ -150,6 +155,12 @@ Interactive docs: <http://127.0.0.1:8000/docs>.
 | `/contracts` | Owner-scoped list with analysis status |
 | `/contracts/[id]` | **The main screen** — live-progress analysis, risk overview, executive summary, missing-protection findings, progressive-disclosure clause cards |
 | `/dashboard` | Evaluation dashboard: per-class F1, run latency, compliance |
+
+The header's language switch (EN ⇄ עברית) sets the `NEXT_LOCALE` cookie; the
+root layout resolves it (cookie → `Accept-Language` → English) and renders
+`<html lang dir>`, so routes and `proxy.ts` never change. Copy lives in
+`frontend/src/i18n/{en,he}.ts` — the Hebrew file is typed against the English
+one, so a missing key is a compile error.
 
 ## Backend module map
 

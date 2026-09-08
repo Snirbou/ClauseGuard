@@ -1,5 +1,7 @@
+"use client";
+
 import type { ContractFinding } from "@/types/contracts";
-import { pluralize } from "@/lib/format";
+import { useI18n } from "@/i18n/I18nProvider";
 
 const SEVERITY_STYLES: Record<string, { card: string; badge: string }> = {
   high: {
@@ -15,24 +17,33 @@ const SEVERITY_STYLES: Record<string, { card: string; badge: string }> = {
 /**
  * Contract-level missing-protection findings. What a contract does NOT say
  * is often the freelancer's biggest risk — these cards surface exactly that.
+ *
+ * Copy is looked up by `pain_point` in the dictionary; a pain point the
+ * dictionary does not know falls back to the server's English title/detail,
+ * rendered as explicit LTR English so it reads correctly in an RTL layout.
  */
 export default function FindingsSection({ findings }: { findings: ContractFinding[] }) {
+  const { dict } = useI18n();
   if (findings.length === 0) return null;
 
   return (
-    <section aria-label="Missing protections" className="flex flex-col gap-3">
+    <section aria-label={dict.findings.title} className="flex flex-col gap-3">
       <div className="flex items-baseline justify-between gap-3">
-        <h2 className="text-lg font-semibold tracking-tight">
-          Missing protections
-        </h2>
+        <h2 className="text-lg font-semibold tracking-tight">{dict.findings.title}</h2>
         <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          {findings.length} {pluralize(findings.length, "gap")} detected
+          {dict.findings.gaps(findings.length)}
         </p>
       </div>
 
       <ul className="flex flex-col gap-3">
         {findings.map((finding) => {
           const styles = SEVERITY_STYLES[finding.severity] ?? SEVERITY_STYLES.medium;
+          const t = dict.findings.byPainPoint[finding.pain_point];
+          // Server text is English regardless of the UI locale (never
+          // translate model/contract output), so mark it as such when used.
+          const englishFallback = t === undefined;
+          const englishProps = englishFallback ? { dir: "ltr", lang: "en" } : {};
+          const englishClass = englishFallback ? " text-start" : "";
           return (
             <li
               key={finding.id}
@@ -42,12 +53,17 @@ export default function FindingsSection({ findings }: { findings: ContractFindin
                 <span
                   className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${styles.badge}`}
                 >
-                  {finding.severity}
+                  {dict.findings.severity[finding.severity] ?? finding.severity}
                 </span>
-                <h3 className="text-sm font-semibold">{finding.title}</h3>
+                <h3 className={`text-sm font-semibold${englishClass}`} {...englishProps}>
+                  {t?.title ?? finding.title}
+                </h3>
               </div>
-              <p className="mt-2 text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
-                {finding.detail}
+              <p
+                className={`mt-2 text-sm leading-relaxed text-zinc-700 dark:text-zinc-300${englishClass}`}
+                {...englishProps}
+              >
+                {t?.detail ?? finding.detail}
               </p>
             </li>
           );

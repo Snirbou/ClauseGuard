@@ -41,7 +41,7 @@ analysis runs, and warms the classifier. Interactive docs:
 ## Verify
 
 ```powershell
-venv\Scripts\python -m pytest tests\          # 117 unit tests
+venv\Scripts\python -m pytest tests\          # 127 unit tests
 venv\Scripts\python smoke_test.py             # 63 end-to-end checks (needs DB + server)
 venv\Scripts\python -m ruff check .
 ```

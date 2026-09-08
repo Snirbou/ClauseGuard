@@ -4,7 +4,9 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { ApiError, login, register } from "@/lib/api";
+import { apiErrorMessage } from "@/i18n";
+import { useI18n } from "@/i18n/I18nProvider";
+import { login, register } from "@/lib/api";
 import ErrorMessage from "@/components/ErrorMessage";
 import LoadingSpinner from "@/components/LoadingSpinner";
 
@@ -14,36 +16,24 @@ type Props = {
   mode: "login" | "signup";
 };
 
-const COPY = {
-  login: {
-    title: "Welcome back",
-    subtitle: "Sign in to see your contracts and analyses.",
-    submit: "Sign in",
-    switchText: "New to ClauseGuard?",
-    switchHref: "/signup",
-    switchLabel: "Create an account",
-  },
-  signup: {
-    title: "Create your account",
-    subtitle: "Your contracts and analyses stay private to your account.",
-    submit: "Create account",
-    switchText: "Already have an account?",
-    switchHref: "/login",
-    switchLabel: "Sign in",
-  },
+/** Where the "switch mode" link under the form points; copy comes from the dictionary. */
+const SWITCH_HREF = {
+  login: "/signup",
+  signup: "/login",
 } as const;
 
 export default function AuthForm({ mode }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
+  const { dict } = useI18n();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const copy = COPY[mode];
+  const copy = dict.auth[mode];
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -51,11 +41,11 @@ export default function AuthForm({ mode }: Props) {
 
     const trimmedEmail = email.trim();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(trimmedEmail)) {
-      setError("Enter a valid email address.");
+      setError(dict.auth.invalidEmail);
       return;
     }
     if (password.length < MIN_PASSWORD_LENGTH) {
-      setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+      setError(dict.auth.passwordTooShort(MIN_PASSWORD_LENGTH));
       return;
     }
 
@@ -72,11 +62,7 @@ export default function AuthForm({ mode }: Props) {
       // Only follow same-app relative paths — never external redirects.
       router.push(next && next.startsWith("/") && !next.startsWith("//") ? next : "/contracts");
     } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : "Something went wrong. Please try again.",
-      );
+      setError(apiErrorMessage(dict, err, dict.auth.genericError));
       setSubmitting(false);
     }
   }
@@ -103,8 +89,9 @@ export default function AuthForm({ mode }: Props) {
             htmlFor="auth-email"
             className="text-xs font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-400"
           >
-            Email
+            {dict.auth.email}
           </label>
+          {/* Email addresses are always LTR, even in the RTL UI. */}
           <input
             id="auth-email"
             type="email"
@@ -113,8 +100,9 @@ export default function AuthForm({ mode }: Props) {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             disabled={submitting}
+            dir="ltr"
             className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none transition-colors focus:border-zinc-500 focus-visible:ring-2 focus-visible:ring-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-            placeholder="you@example.com"
+            placeholder={dict.auth.emailPlaceholder}
           />
         </div>
 
@@ -123,7 +111,7 @@ export default function AuthForm({ mode }: Props) {
             htmlFor="auth-password"
             className="text-xs font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-400"
           >
-            Password
+            {dict.auth.password}
           </label>
           <input
             id="auth-password"
@@ -135,7 +123,11 @@ export default function AuthForm({ mode }: Props) {
             onChange={(e) => setPassword(e.target.value)}
             disabled={submitting}
             className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none transition-colors focus:border-zinc-500 focus-visible:ring-2 focus-visible:ring-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-            placeholder={mode === "signup" ? `At least ${MIN_PASSWORD_LENGTH} characters` : "Your password"}
+            placeholder={
+              mode === "signup"
+                ? dict.auth.passwordPlaceholderSignup(MIN_PASSWORD_LENGTH)
+                : dict.auth.passwordPlaceholderLogin
+            }
           />
         </div>
 
@@ -147,7 +139,7 @@ export default function AuthForm({ mode }: Props) {
           {submitting ? (
             <>
               <LoadingSpinner size="sm" />
-              {mode === "signup" ? "Creating account…" : "Signing in…"}
+              {copy.submitting}
             </>
           ) : (
             copy.submit
@@ -158,7 +150,7 @@ export default function AuthForm({ mode }: Props) {
       <p className="mt-4 text-center text-sm text-zinc-600 dark:text-zinc-400">
         {copy.switchText}{" "}
         <Link
-          href={copy.switchHref}
+          href={SWITCH_HREF[mode]}
           className="font-semibold text-zinc-900 underline underline-offset-2 dark:text-zinc-100"
         >
           {copy.switchLabel}
