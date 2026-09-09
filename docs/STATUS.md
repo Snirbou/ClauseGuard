@@ -1,7 +1,7 @@
 # ClauseGuard — Project Status
 
 **As of:** 2026-09-09
-**Branch:** `main` (the only branch)
+**Branch:** `main` (the only long-lived branch, protected: PR + green CI)
 **Verify anything on this page yourself:**
 
 ```bash
@@ -53,7 +53,7 @@ no API key it runs in offline demo mode; pasting a real `OPENAI_API_KEY` into
 | Hebrew/RTL live check (dev server + browser) | `lang=he dir=rtl`, Heebo applied, he-IL dates, English clause/summary blocks LTR, mirrored disclosure glyph, no horizontal overflow at 375 px |
 | Migration drift (`alembic check`) | none |
 | spaCy ablation (`07_spacy_model_ablation.py`, sm / md / lg) | served macro-F1 0.8801 / 0.8808 / 0.8811; RSS 328 / 527 / 902 MB |
-| GitHub Actions CI | all four jobs green (`Backend`, `API image`, `Web image`, `Frontend`) |
+| GitHub Actions CI | all four jobs green (`Backend`, `API image`, `Web image`, `Frontend`); `main` is protected and requires them |
 
 Four adversarial reviews have been run against this build (backend/security,
 frontend correctness, the Hebrew/RTL layer, and the evaluation harness). Each
@@ -68,7 +68,8 @@ silently shrunken sample — which is exactly what that review existed to catch.
 ## 2. What remains — the execution plan
 
 Phases run in this order (portfolio URL first). Each ends with the full
-verification set and one commit on `main`.
+verification set and a pull request — `main` is protected, so work lands
+through a short-lived branch with the four CI jobs green.
 
 | # | Phase | Gate | State |
 |---|---|---|---|
@@ -84,8 +85,6 @@ verification set and one commit on `main`.
 - **Create the Railway project** and paste the variables — the click-path is
   `docs/DEPLOY.md` §1. Until a key exists the site runs the labeled demo
   analyzer (`DSPY_PROVIDER=fake`); afterwards pin `openai`.
-- **Protect `main`** in GitHub → *Settings → Branches* (require PR + green
-  CI, including the new `api-image` job). Cannot be done from the CLI here.
 - **Provide the contracts** (Phase 3): drop ~10 anonymised PDFs into
   `backend/eval/corpus/` (gitignored), run `eval/annotate.py` on each and
   correct the draft — `backend/eval/README.md` is the walkthrough. Until
