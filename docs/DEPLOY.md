@@ -5,8 +5,8 @@ Three services in one Railway project:
 ```
 browser ──https──► web (Next.js, frontend/Dockerfile)
                      │  /api/* same-origin rewrite, baked at build time
-                     ▼  http://api.railway.internal:8000  (private network, IPv6)
-                   api (FastAPI, backend/Dockerfile)
+                     ▼  http://<api service>.railway.internal:8000  (private, IPv6)
+                   ClauseGuard (FastAPI, backend/Dockerfile)
                      ▼  DATABASE_URL (private network)
                    Postgres (Railway plugin)
 ```
@@ -18,12 +18,21 @@ domain is optional; it exposes `/docs` and nothing that is not behind auth.
 ## 1. One-time setup (Railway dashboard)
 
 1. **Project** — *New Project → Deploy from GitHub repo → `Snirbou/ClauseGuard`*.
-   Railway creates one service; rename it **`api`**.
-   *Settings → Source → Root Directory:* `backend`.
+   Railway creates one service and names it after the repo: **`ClauseGuard`**.
+   The name is only a reference — the web service addresses it by that name —
+   so keep it, or rename it by clicking the title in the service panel.
+   Whatever you choose, use the same name in `BACKEND_URL` below.
+   *Settings → Source → Add Root Directory:* `backend`.
    *Settings → Config-as-code:* `/backend/railway.json` (absolute path from
-   the repo root — it does not follow the root directory).
+   the repo root — this field does **not** follow the root directory).
+
+   The first build fails if you deploy before setting the root directory:
+   Railway looks for a Dockerfile at the repo root and there isn't one.
 2. **Database** — *+ New → Database → PostgreSQL*. Leave it private.
-3. **api variables** (*Variables* tab, "Raw editor" is fastest):
+3. **API variables** — *Variables* tab; the `⋯` menu there opens a **Raw
+   Editor** that takes the whole block at once (otherwise add them one by
+   one). Add the Postgres plugin first, or `${{Postgres.DATABASE_URL}}`
+   resolves to nothing:
 
    | Variable | Value | Why |
    |---|---|---|
@@ -44,16 +53,16 @@ domain is optional; it exposes `/docs` and nothing that is not behind auth.
 
    | Variable | Value | Why |
    |---|---|---|
-   | `BACKEND_URL` | `http://${{api.RAILWAY_PRIVATE_DOMAIN}}:8000` | build arg: the Next rewrite target is serialised into the standalone build |
+   | `BACKEND_URL` | `http://${{ClauseGuard.RAILWAY_PRIVATE_DOMAIN}}:8000` | build arg: the Next rewrite target is serialised into the standalone build. **Substitute the API service's actual name** if you renamed it |
    | `PORT` | `3000` | |
 
    *Settings → Networking → Generate Domain* on port `3000`. This is the
    product URL.
-5. **Watch paths** (each service, *Settings → Build*): `/backend/**` for
-   `api`, `/frontend/**` for `web`, so a frontend commit does not rebuild the
+5. **Watch paths** (each service, *Settings → Build*): `/backend/**` for the
+   API, `/frontend/**` for `web`, so a frontend commit does not rebuild the
    API (the model layer is cached, but the build still takes minutes).
-6. **Deploy order**: Postgres first (automatic), then `api`, then `web`
-   (its build needs `api`'s private domain to exist — it only needs the
+6. **Deploy order**: Postgres first (automatic), then the API, then `web`
+   (its build needs the API's private domain to exist — it only needs the
    *name*, not a running instance).
 
 Every push to `main` now redeploys the affected service (Railway's GitHub
@@ -87,7 +96,7 @@ integration is the CD).
 
 | Task | How |
 |---|---|
-| Flip demo ↔ real analysis | set `OPENAI_API_KEY` + `DSPY_PROVIDER=openai` on `api`, redeploy |
+| Flip demo ↔ real analysis | set `OPENAI_API_KEY` + `DSPY_PROVIDER=openai` on the API service, redeploy |
 | Roll back | *Deployments → previous deployment → Redeploy* |
 | Inspect | `curl https://<api-domain>/api/health` (200 = healthy, 503 = degraded, body says why) |
 | Logs to expect at boot | Alembic upgrade lines, `Layer 1 classifier ready (mode=model)`, cold start 10–25 s (spaCy loads before the port opens; the health-check timeout is 300 s) |
@@ -105,7 +114,7 @@ curl -s https://<web-domain>/api/health          # identical body → the privat
 cd backend && venv/Scripts/python smoke_test.py --base-url https://<web-domain>
 ```
 
-The smoke test passes all 63 checks in demo mode (`DSPY_PROVIDER=fake`) and
+The smoke test passes all 73 checks in demo mode (`DSPY_PROVIDER=fake`) and
 on the real path once a key is configured. In the browser: sign up, upload
 a PDF, run the analysis, open the dashboard (should say *Trained model*);
 DevTools → Application → Cookies: `cg_session` is `HttpOnly; Secure;
@@ -126,7 +135,7 @@ normalisation path a managed host relies on.
 
 | Symptom | Cause / fix |
 |---|---|
-| `api` health 503, `database: unavailable` | Postgres not reachable: check `DATABASE_URL` references the plugin; the body's `startup_error` says what failed |
+| API health 503, `database: unavailable` | Postgres not reachable: check `DATABASE_URL` references the plugin; the body's `startup_error` says what failed |
 | `web` returns 502/`Could not reach the ClauseGuard API` | `BACKEND_URL` wrong or set after the build (it is baked in — redeploy `web`); check the API log line `[serve] listening on 0.0.0.0, [::]` |
 | Signed in but every call is 401 | cookie dropped: `SESSION_COOKIE_SECURE` must be `true` under HTTPS and the browser must hit the **web** domain, not the API domain |
 | Everyone gets 429 on login after a few attempts | the proxy is not forwarding client addresses; see `auth._client_key` (X-Forwarded-For) |
