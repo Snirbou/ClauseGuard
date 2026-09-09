@@ -32,7 +32,8 @@ needed to switch to real AI analysis.
 | Alembic migrations, CI (lint + 127 unit tests + migration drift check + image boot test), 63-check E2E smoke test | ✅ |
 | Dockerfiles + full-stack compose, Railway config (`docs/DEPLOY.md`) | ✅ |
 | **Hebrew UI + RTL** — Layer 1: a Hebrew interface (cookie-based EN/HE switch, no URL prefix) for English contracts; findings and API errors translated, contract text and AI output stay English | ✅ |
-| Cloud deployment (Railway project pending), OCR for scanned PDFs, Hebrew AI output | ❌ future (see docs/STATUS.md) |
+| **OCR for scanned PDFs** — image-only pages are read with Tesseract, capped and reported | ✅ |
+| Cloud deployment (Railway project pending), Hebrew AI output | ❌ future (see docs/STATUS.md) |
 
 ---
 
@@ -167,6 +168,7 @@ one, so a missing key is a compile error.
 | File | Responsibility |
 |---|---|
 | `main.py` | FastAPI app, endpoints, error envelopes, middleware |
+| `pdf_extract.py` | The one extraction path: text, layout, and OCR for scanned pages |
 | `auth.py` | Argon2 hashing, cookie sessions, rate limiting |
 | `analysis_service.py` | Analysis runs: scheduling, concurrency, caching, recovery |
 | `segmentation.py` | Clause splitting: blank-line / layout / regex strategies |
@@ -176,11 +178,15 @@ one, so a missing key is a compile error.
 | `pain_points.py` | Missing-protection checklist (PRD's five pain points) |
 | `contract_summary.py` | Executive-summary signature + demo fallback |
 | `upl.py` | Prescriptive-language filter (AC-P02) |
+| `readability.py` | Flesch-Kincaid grade of the summaries served (AC-P04) |
+| `error_codes.py` | Stable error codes the UI maps to localized messages |
 | `fake_llm.py` | Deterministic offline analyzer (demo mode / CI) |
 | `db_writer.py`, `models.py`, `database.py`, `config.py` | Persistence + settings |
 | `alembic/` | Migrations (startup runs `upgrade head`; pre-Alembic DBs are stamped) |
 | `ml_training/` | Isolated training sandbox for the classifier artifact |
-| `smoke_test.py` | 63-check end-to-end verification |
+| `eval/` | Real-contract benchmark: annotation format, segmentation gate, AC-R05 (see its README) |
+| `eval_info.py` | Serves the committed risk-evaluation sidecar to the dashboard |
+| `smoke_test.py` | 73-check end-to-end verification |
 
 ## Implementation notes worth knowing
 

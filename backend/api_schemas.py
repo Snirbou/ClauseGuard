@@ -207,6 +207,9 @@ class HealthResponse(BaseModel):
     model: str
     auto_analyze_on_upload: bool
     max_upload_mb: float
+    # Whether scanned PDFs can be read: OCR is enabled AND a Tesseract
+    # binary is present. False means image-only uploads are refused.
+    ocr: dict[str, Any] = Field(default_factory=dict)
     # Layer 1 classifier status: mode ("model" | "mock"), artifact metadata
     # and test metrics when the trained pipeline is live.
     classifier: dict[str, Any] = Field(default_factory=dict)

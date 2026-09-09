@@ -472,3 +472,126 @@ def test_targets_are_the_acceptance_criteria_numbers() -> None:
     # by the harness and the dashboard reader.
     assert eval_info.TARGETS == {"precision": 0.75, "recall": 0.70}
     assert risk_eval.TARGETS is eval_info.TARGETS
+
+
+# ---------------------------------------------------------------------------
+# Measurement honesty (adversarial review, 2026-09-09)
+# ---------------------------------------------------------------------------
+
+def test_cache_key_separates_compiled_programs() -> None:
+    """Re-optimizing the prompt must invalidate the evaluation cache.
+
+    Without the program identity in the key, a re-run after `run_miprov2`
+    serves every answer from the old program's cache and republishes those
+    numbers as the new program's measured AC-R05 result — a prompt
+    regression would be invisible and an improvement never measured.
+    """
+    text, provider, model = "The Contractor assigns all rights.", "openai", "gpt-4o-mini"
+    old = risk_eval.cache_key(text, provider, model, "openai/gpt-4o-mini|dspy-3.3.0|v4|opt:aaaa")
+    new = risk_eval.cache_key(text, provider, model, "openai/gpt-4o-mini|dspy-3.3.0|v4|opt:bbbb")
+    assert old != new
+
+    # The other separations still hold.
+    assert risk_eval.cache_key(text, "fake", model, "i") != risk_eval.cache_key(
+        text, provider, model, "i"
+    )
+    assert risk_eval.cache_key("other", provider, model, "i") != risk_eval.cache_key(
+        text, provider, model, "i"
+    )
+    # Same everything -> same key, so the cache still works.
+    assert risk_eval.cache_key(text, provider, model, "i") == risk_eval.cache_key(
+        text, provider, model, "i"
+    )
+
+
+def test_cache_key_identity_defaults_to_empty() -> None:
+    """The parameter is optional so the unit tests can call it positionally."""
+    assert risk_eval.cache_key("t", "p", "m") == risk_eval.cache_key("t", "p", "m", "")
+
+
+def test_gold_problems_are_collected_not_only_logged(tmp_path: Path) -> None:
+    """An anchor that stops resolving must be reported, not silently dropped.
+
+    A dropped clause shrinks the denominator, and a smaller denominator
+    flatters precision and recall — the failure this harness exists to avoid.
+    """
+    doc = fitz.open()
+    doc.new_page().insert_textbox(
+        fitz.Rect(56, 56, 556, 780),
+        "1. PAYMENT. The Client shall pay within thirty days.\n\n"
+        "2. LIABILITY. The Contractor indemnifies the Client without limit.",
+        fontsize=11,
+        fontname="helv",
+    )
+    (tmp_path / "sample.pdf").write_bytes(doc.tobytes())
+    doc.close()
+
+    (tmp_path / "sample.gold.json").write_text(
+        json.dumps(
+            {
+                "file": "sample.pdf",
+                "clauses": [
+                    {
+                        "id": 1,
+                        "anchor_start": "1. PAYMENT. The Client shall pay",
+                        "anchor_end": "within thirty days.",
+                        "clause_type": "payment_terms",
+                        "high_risk": False,
+                    },
+                    {
+                        "id": 2,
+                        "anchor_start": "THIS SENTENCE IS NOT IN THE CONTRACT",
+                        "anchor_end": "nor is this",
+                        "clause_type": "liability",
+                        "high_risk": True,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    problems: list[str] = []
+    clauses = risk_eval.load_gold_clauses(
+        tmp_path, log=lambda _m: None, problems=problems
+    )
+    assert len(clauses) == 1, "the resolvable clause is still measured"
+    assert problems, "the unresolvable anchor must be reported so main() can refuse"
+    # The message must name the offending clause; the exact wording comes from
+    # whichever resolver ran (the shared eval package or the local fallback).
+    assert any("clause #2" in problem for problem in problems), problems
+
+
+def test_clean_gold_reports_no_problems(tmp_path: Path) -> None:
+    doc = fitz.open()
+    doc.new_page().insert_textbox(
+        fitz.Rect(56, 56, 556, 780),
+        "1. PAYMENT. The Client shall pay within thirty days.",
+        fontsize=11,
+        fontname="helv",
+    )
+    (tmp_path / "ok.pdf").write_bytes(doc.tobytes())
+    doc.close()
+
+    (tmp_path / "ok.gold.json").write_text(
+        json.dumps(
+            {
+                "file": "ok.pdf",
+                "clauses": [
+                    {
+                        "id": 1,
+                        "anchor_start": "1. PAYMENT. The Client shall pay",
+                        "anchor_end": "within thirty days.",
+                        "clause_type": "payment_terms",
+                        "high_risk": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    problems: list[str] = []
+    clauses = risk_eval.load_gold_clauses(tmp_path, log=lambda _m: None, problems=problems)
+    assert len(clauses) == 1
+    assert problems == []

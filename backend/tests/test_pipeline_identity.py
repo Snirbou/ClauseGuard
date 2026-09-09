@@ -47,10 +47,16 @@ def test_program_tag_is_content_addressed(tmp_path, monkeypatch) -> None:
     assert optimizer.optimized_program_tag() == first
 
     artifact.write_text('{"demos": [1]}', encoding="utf-8")
-    assert optimizer.optimized_program_tag() != first
+    second = optimizer.optimized_program_tag()
+    assert second != first
 
-    assert analysis_service.program_identity()["optimized"] is True
-    assert first.removeprefix("opt:") in analysis_service.pipeline_fingerprint() or True
+    identity = analysis_service.program_identity()
+    assert identity["optimized"] is True
+    assert identity["artifact_sha"] == second.removeprefix("opt:")
+    # The tag must actually reach the cache key, or re-optimizing the program
+    # would serve every clause from the previous program's cached answers.
+    assert second in analysis_service.pipeline_fingerprint()
+    assert first not in analysis_service.pipeline_fingerprint()
 
 
 def test_finalize_rewrites_prescriptive_text_and_sets_level() -> None:

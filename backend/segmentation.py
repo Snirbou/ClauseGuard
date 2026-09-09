@@ -162,26 +162,37 @@ def segment_text(full_text: str, lines: list[LineInfo] | None = None) -> list[st
     return blank  # zero or one segment: the document as a whole
 
 
+def lines_from_page_dict(data: dict) -> list[LineInfo]:
+    """Per-line typography from one PyMuPDF ``get_text("dict")`` payload.
+
+    Split out of ``extract_lines`` so a caller that already holds a TextPage
+    — notably the OCR path in ``pdf_extract`` — can produce the same
+    ``LineInfo`` shape without re-reading the page.
+    """
+    lines: list[LineInfo] = []
+    for block in data.get("blocks", []):
+        for raw_line in block.get("lines", []):
+            spans = raw_line.get("spans", [])
+            if not spans:
+                continue
+            text = "".join(span.get("text", "") for span in spans)
+            if not text.strip():
+                continue
+            lines.append(
+                LineInfo(
+                    text=text,
+                    max_size=max(float(span.get("size", 0.0)) for span in spans),
+                    all_bold=all(
+                        (int(span.get("flags", 0)) & _BOLD_FLAG) != 0 for span in spans
+                    ),
+                )
+            )
+    return lines
+
+
 def extract_lines(doc) -> list[LineInfo]:
     """Pull per-line typography from an open PyMuPDF document."""
     lines: list[LineInfo] = []
     for page in doc:
-        data = page.get_text("dict")
-        for block in data.get("blocks", []):
-            for raw_line in block.get("lines", []):
-                spans = raw_line.get("spans", [])
-                if not spans:
-                    continue
-                text = "".join(span.get("text", "") for span in spans)
-                if not text.strip():
-                    continue
-                lines.append(
-                    LineInfo(
-                        text=text,
-                        max_size=max(float(span.get("size", 0.0)) for span in spans),
-                        all_bold=all(
-                            (int(span.get("flags", 0)) & _BOLD_FLAG) != 0 for span in spans
-                        ),
-                    )
-                )
+        lines.extend(lines_from_page_dict(page.get_text("dict")))
     return lines

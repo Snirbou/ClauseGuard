@@ -23,6 +23,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Tesseract reads scanned contracts. PyMuPDF shells out to it, so this is a
+# system package rather than a Python one; its own layer because it changes
+# far less often than the code. ~60MB with the English data.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
+    && rm -rf /var/lib/apt/lists/*
+
 # Exact, reproducible dependency set. The spaCy model is deliberately not in
 # the lockfile — it is its own cached layer below, selectable by build arg.
 COPY requirements.lock.txt .

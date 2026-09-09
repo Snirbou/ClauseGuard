@@ -80,6 +80,25 @@ def build_pdf() -> bytes:
     return data
 
 
+def build_scanned_pdf() -> bytes:
+    """The same contract as an image — no text layer, i.e. a scan.
+
+    JPEG-compressed at 150 dpi: a raw pixmap of a full page is tens of
+    megabytes and would be rejected by the upload size limit before OCR ever
+    ran, which is not the path this fixture exists to test.
+    """
+    source = fitz.open(stream=build_pdf(), filetype="pdf")
+    scanned = fitz.open()
+    for page in source:
+        pixmap = page.get_pixmap(dpi=150)
+        image_page = scanned.new_page(width=page.rect.width, height=page.rect.height)
+        image_page.insert_image(image_page.rect, stream=pixmap.tobytes("jpeg", jpg_quality=85))
+    data: bytes = scanned.tobytes(deflate=True)
+    source.close()
+    scanned.close()
+    return data
+
+
 def main() -> None:
     # Windows consoles/pipes default to a legacy code page that cannot print
     # the arrows in these messages; never let the report crash on output.
@@ -398,6 +417,33 @@ def main() -> None:
             ),
         )
         client.delete(f"/api/contracts/{gap_id}")
+
+    # --- scanned PDF (OCR) --------------------------------------------------
+    print("\n[8e] POST /api/contracts/upload (scanned, image-only PDF)")
+    ocr = health.get("ocr", {})
+    res = client.post(
+        "/api/contracts/upload",
+        files={"file": ("scanned.pdf", build_scanned_pdf(), "application/pdf")},
+    )
+    if ocr.get("usable"):
+        check("scanned upload responds 200", res.status_code == 200, res.text[:300])
+        if res.status_code == 200:
+            scanned = res.json()
+            check(
+                "OCR produced clauses",
+                len(scanned.get("parsed_clauses", [])) >= 1,
+                f"{len(scanned.get('parsed_clauses', []))} clauses",
+            )
+            text = " ".join(c["raw_text"] for c in scanned["parsed_clauses"]).lower()
+            check("OCR text is recognisable", "contractor" in text or "payment" in text, text[:160])
+            client.delete(f"/api/contracts/{scanned['contract_id']}")
+    else:
+        check(
+            "scanned upload refused with the OCR code",
+            res.status_code == 400 and res.json().get("code") == "upload.needs_ocr",
+            f"got {res.status_code}: {res.text[:200]}",
+        )
+        print(f"        OCR not usable here ({ocr}) — refusal path checked instead.")
 
     # --- evaluation dashboard payload (AcceptanceCriteria section 4) -------
     print("\n[8d] GET /api/metrics")

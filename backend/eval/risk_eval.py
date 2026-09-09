@@ -74,6 +74,13 @@ SIDECAR_NAME = "risk_eval.json"
 #: Sweep range from the task spec: 0.40 .. 0.85 inclusive, step 0.05.
 SWEEP_THRESHOLDS: tuple[float, ...] = tuple(round(0.40 + 0.05 * i, 2) for i in range(10))
 
+#: Exit codes, mirroring eval/segmentation_eval.py so the two evaluators
+#: fail the same way. BAD_GOLD means the benchmark is broken, not the
+#: product: some labelled clause never reached the measurement.
+EXIT_OK = 0
+EXIT_NOTHING = 1
+EXIT_BAD_GOLD = 3
+
 CUAD_CAVEAT = "CUAD proxy: commercial contracts, category-level labels, signer ambiguity"
 FAKE_CAVEAT = (
     "fake provider: the offline demo analyzer scores clauses from a hash of "
@@ -148,8 +155,16 @@ class _GoldDoc:
     resolve: Callable[[str], list[GoldSpan]]
 
 
+def _noop(_message: str) -> None:
+    """Default ``report``: log-only, for callers that do not gate on problems."""
+
+
 def _local_gold_spans(
-    normalised_text: str, payload: dict[str, Any], name: str, log: Callable[[str], None]
+    normalised_text: str,
+    payload: dict[str, Any],
+    name: str,
+    log: Callable[[str], None],
+    report: Callable[[str], None] = _noop,
 ) -> list[GoldSpan]:
     """Fallback resolver: the same cursor walk the shared package performs."""
     spans: list[GoldSpan] = []
@@ -159,7 +174,9 @@ def _local_gold_spans(
             continue
         start = _resolve_anchor(normalised_text, str(raw.get("anchor_start") or ""), cursor)
         if start < 0:
-            log(f"  ! {name} clause #{position}: anchor_start did not resolve")
+            message = f"{name} clause #{position}: anchor_start did not resolve"
+            log(f"  ! {message}")
+            report(message)
             continue
         end = len(normalised_text)
         tail = _normalise(str(raw.get("anchor_end") or ""))
@@ -170,14 +187,25 @@ def _local_gold_spans(
             if found >= 0:
                 end = found + len(tail)
             else:
-                log(f"  ! {name} clause #{position}: anchor_end did not resolve")
+                message = f"{name} clause #{position}: anchor_end did not resolve"
+                log(f"  ! {message}")
+                report(message)
         spans.append((normalised_text[start:end], raw.get("clause_type"), raw.get("high_risk")))
         cursor = max(start + 1, end)
     return spans
 
 
-def _load_gold_doc(gold_path: Path, log: Callable[[str], None]) -> _GoldDoc | None:
-    """Parse one gold file through the shared package, or locally."""
+def _load_gold_doc(
+    gold_path: Path,
+    log: Callable[[str], None],
+    report: Callable[[str], None] = _noop,
+) -> _GoldDoc | None:
+    """Parse one gold file through the shared package, or locally.
+
+    ``report`` receives every anchor that did not resolve. Those clauses are
+    dropped from the measurement, so the caller must be able to refuse to
+    publish rather than quietly score a subset.
+    """
     shared = _shared_gold_module()
     if shared is not None:
         try:
@@ -187,9 +215,10 @@ def _load_gold_doc(gold_path: Path, log: Callable[[str], None]) -> _GoldDoc | No
             return None
 
         def resolve(normalised_text: str) -> list[GoldSpan]:
-            resolved, problems = shared.resolve_gold(normalised_text, gold)
-            for problem in problems:
+            resolved, issues = shared.resolve_gold(normalised_text, gold)
+            for problem in issues:
                 log(f"  ! {problem}")
+                report(str(problem))
             return [(item.text, item.clause_type, item.high_risk) for item in resolved]
 
         return _GoldDoc(pdf_name=gold.pdf_path.name, resolve=resolve)
@@ -206,7 +235,7 @@ def _load_gold_doc(gold_path: Path, log: Callable[[str], None]) -> _GoldDoc | No
     stem = gold_path.name.removesuffix(".gold.json")
     return _GoldDoc(
         pdf_name=str(payload.get("file") or payload.get("pdf") or f"{stem}.pdf"),
-        resolve=lambda text: _local_gold_spans(text, payload, gold_path.name, log),
+        resolve=lambda text: _local_gold_spans(text, payload, gold_path.name, log, report),
     )
 
 
@@ -225,7 +254,12 @@ class EvalClause:
     gold_clause_type: str | None = None
 
 
-def load_gold_clauses(corpus_dir: Path, *, log: Callable[[str], None] = print) -> list[EvalClause]:
+def load_gold_clauses(
+    corpus_dir: Path,
+    *,
+    log: Callable[[str], None] = print,
+    problems: list[str] | None = None,
+) -> list[EvalClause]:
     """Read ``*.gold.json`` and resolve each anchor against the contract text.
 
     Anchors resolve against the whitespace-normalised text of
@@ -234,29 +268,41 @@ def load_gold_clauses(corpus_dir: Path, *, log: Callable[[str], None] = print) -
     cannot drift away from the product. Clauses whose ``high_risk`` is null
     are skipped: unlabelled is not the same as safe, and counting them as
     negatives would inflate precision.
+
+    ``problems`` collects anchors that did not resolve and files that could
+    not be read. The caller refuses to publish when it is non-empty: a
+    dropped clause shrinks the denominator, and a smaller denominator
+    flatters precision and recall.
     """
     if not corpus_dir.is_dir():
         return []
 
     from pdf_extract import extract_document_text
 
+    def report_problem(message: str) -> None:
+        if problems is not None:
+            problems.append(message)
+
     clauses: list[EvalClause] = []
 
     for gold_path in sorted(corpus_dir.glob("*.gold.json")):
         stem = gold_path.name.removesuffix(".gold.json")
-        gold = _load_gold_doc(gold_path, log)
+        gold = _load_gold_doc(gold_path, log, report_problem)
         if gold is None:
+            report_problem(f"{gold_path.name}: could not be read")
             continue
 
         pdf_path = corpus_dir / gold.pdf_name
         if not pdf_path.exists():
             log(f"  ! {gold_path.name}: no PDF at {pdf_path.name} - skipped")
+            report_problem(f"{gold_path.name}: no PDF at {pdf_path.name}")
             continue
 
         try:
             extracted = extract_document_text(pdf_path.read_bytes())
         except Exception as exc:  # one unreadable PDF must not end the run
             log(f"  ! {pdf_path.name}: extraction failed ({exc}) - skipped")
+            report_problem(f"{pdf_path.name}: extraction failed ({exc})")
             continue
 
         kept = 0
@@ -384,13 +430,18 @@ def load_cuad_clauses(
 # Layer 2 cache
 # ---------------------------------------------------------------------------
 
-def cache_key(text: str, provider: str, model: str) -> str:
-    """Identity of one LLM answer: the clause plus who answered.
+def cache_key(text: str, provider: str, model: str, identity: str = "") -> str:
+    """Identity of one LLM answer: the clause plus everything that shaped it.
 
-    The provider/model half is what keeps a gpt-4o-mini run from silently
-    inheriting the fake analyzer's canned scores.
+    ``identity`` is ``analysis_service.pipeline_fingerprint()`` — the same
+    string production keys its own clause cache on, covering the compiled
+    DSPy program's content hash and the pipeline version as well as the
+    provider/model. Without it, re-optimizing the prompt and re-running this
+    harness would serve every answer from the old program's cache and
+    publish those numbers as the new program's measured result: a prompt
+    regression would be invisible and an improvement never measured.
     """
-    return hashlib.sha256(f"{text}|{provider}/{model}".encode()).hexdigest()
+    return hashlib.sha256(f"{text}|{provider}/{model}|{identity}".encode()).hexdigest()
 
 
 def load_l2_cache(path: Path) -> dict[str, dict[str, Any]]:
@@ -459,29 +510,43 @@ def run_pipeline(
     model: str,
     cache_path: Path,
     log: Callable[[str], None] = print,
-) -> list[Prediction]:
+) -> tuple[list[Prediction], list[str]]:
     """Push every clause through the real path and collect the verdicts.
+
+    Returns the predictions **and** the clauses Layer 2 could not answer for.
+    A dropped clause shrinks the denominator, which flatters precision and
+    recall, so the caller must refuse to publish when the list is non-empty
+    rather than quietly measure a subset.
 
     Imports are local: this module must stay importable (for the unit tests)
     without dragging in DSPy or the spaCy classifier. The analyzer is built
     once — ``_build_analyzer`` configures the global DSPy LM, which is
     single-owner per process.
     """
-    from analysis_service import _build_analyzer, finalize_clause_result
+    from analysis_service import (
+        _build_analyzer,
+        finalize_clause_result,
+        pipeline_fingerprint,
+    )
     from classifier import classify
     from dspy_pipeline import process_clauses
     from schemas import ClauseAnalysisResult, ClauseInput
 
+    # The production cache identity, reused rather than re-derived: a second
+    # definition here would drift from analysis_service the first time the
+    # signature or the compiled program changes.
+    identity = pipeline_fingerprint()
     cache = load_l2_cache(cache_path)
     analyzer = None
     # Synthetic ids: the harness never touches the database, but ClauseInput
     # and ClauseAnalysisResult are the production schemas and want real UUIDs.
     contract_id = uuid4()
     predictions: list[Prediction] = []
+    dropped: list[str] = []
 
     for index, clause in enumerate(clauses, start=1):
         clause_type, confidence = classify(clause.text)
-        key = cache_key(clause.text, provider, model)
+        key = cache_key(clause.text, provider, model, identity)
         cached_l2 = cache.get(key)
 
         if cached_l2 is None:
@@ -500,7 +565,9 @@ def run_pipeline(
                 analyzer=analyzer,
             )
             if not results:
-                log(f"  ! [{index}/{len(clauses)}] {clause.source}/{clause.doc}: L2 failed - skipped")
+                label = f"{clause.source}/{clause.doc}"
+                log(f"  ! [{index}/{len(clauses)}] {label}: L2 failed - skipped")
+                dropped.append(label)
                 continue
             raw = results[0]
             cached_l2 = {
@@ -544,7 +611,7 @@ def run_pipeline(
             hits = sum(1 for p in predictions if p.cached)
             log(f"  [{index}/{len(clauses)}] analyzed ({hits} from cache)")
 
-    return predictions
+    return predictions, dropped
 
 
 # ---------------------------------------------------------------------------
@@ -748,7 +815,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print(f"[risk_eval] provider={provider} model={model}")
 
-    clauses = load_gold_clauses(args.corpus)
+    # Every clause the harness cannot measure is collected, never merely
+    # logged: a dropped clause shrinks the denominator, and a smaller
+    # denominator flatters precision and recall. Publishing a number computed
+    # over an unknown subset is the one failure this whole harness exists to
+    # prevent, so it is fatal rather than a warning.
+    problems: list[str] = []
+    clauses = load_gold_clauses(args.corpus, problems=problems)
     if not clauses:
         print(f"[risk_eval] no gold clauses under {args.corpus} (private, may be absent).")
     if args.cuad > 0:
@@ -756,29 +829,46 @@ def main(argv: Sequence[str] | None = None) -> int:
             clauses = list(clauses) + load_cuad_clauses(args.cuad)
         except RuntimeError as exc:
             print(f"[risk_eval] {exc}", file=sys.stderr)
-            return 1
+            return EXIT_NOTHING
     if not clauses:
         print(
             "[risk_eval] nothing to evaluate: add gold files to "
             f"{args.corpus} or pass --cuad N.",
             file=sys.stderr,
         )
-        return 1
+        return EXIT_NOTHING
     if args.limit > 0:
         clauses = clauses[: args.limit]
 
     positives = sum(1 for c in clauses if c.gold_high_risk)
     print(f"[risk_eval] {len(clauses)} labelled clause(s), {positives} high-risk")
 
-    predictions = run_pipeline(
+    predictions, dropped = run_pipeline(
         clauses,
         provider=provider,
         model=model,
         cache_path=args.results / L2_CACHE_NAME,
     )
+    problems.extend(f"{label}: Layer 2 returned no result" for label in dropped)
     if not predictions:
         print("[risk_eval] every clause failed Layer 2 - nothing measured.", file=sys.stderr)
-        return 1
+        return EXIT_NOTHING
+
+    if problems:
+        print(
+            f"\n[risk_eval] {len(problems)} labelled clause(s) never reached the "
+            "measurement - refusing to publish a score over a shrunken sample:",
+            file=sys.stderr,
+        )
+        for problem in problems[:20]:
+            print(f"  - {problem}", file=sys.stderr)
+        if len(problems) > 20:
+            print(f"  ... and {len(problems) - 20} more", file=sys.stderr)
+        print(
+            "[risk_eval] fix the gold anchors (or the Layer 2 failures) and re-run.",
+            file=sys.stderr,
+        )
+        return EXIT_BAD_GOLD
 
     caveats: list[str] = []
     if any(p.clause.source == "cuad" for p in predictions):

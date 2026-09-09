@@ -94,6 +94,16 @@ class Settings(BaseSettings):
     # --- Uploads ----------------------------------------------------------
     MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024   # 10 MB
 
+    # --- OCR (scanned PDFs) -------------------------------------------------
+    # Pages with no digital text are rendered and passed to Tesseract, so a
+    # scanned contract is analyzed instead of refused. OCR runs inside the
+    # upload request (~1s per page at 200 dpi), which is why it is capped:
+    # AC-API01 budgets that request a 5s p95, and a 40-page scan would blow
+    # through it. Over the cap the upload is refused with a clear message.
+    OCR_ENABLED: bool = True
+    OCR_MAX_PAGES: int = 20
+    OCR_DPI: int = 200
+
     # --- Pipeline behaviour ----------------------------------------------
     # Off by default: running the DSPy pass inline would make every upload
     # bill OpenAI and block the request for as long as the analysis takes.

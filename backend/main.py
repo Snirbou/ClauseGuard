@@ -88,7 +88,7 @@ from error_codes import (
     CodedHTTPException,
 )
 from optimizer import optimizer_history_info
-from pdf_extract import PasswordProtectedError, extract_document_text
+from pdf_extract import PasswordProtectedError, extract_document_text, ocr_available
 from readability import readability_summary
 from segmentation import segment_text
 from config import settings
@@ -403,11 +403,22 @@ def _extract_and_classify(raw_bytes: bytes, filename: str) -> list[dict[str, Any
     full_text = extracted.full_text
     layout_lines = extracted.layout_lines
     if not full_text:
-        raise _upload_http_error(
+        # pdf_extract already tried OCR when the pages were image-only; its
+        # ocr_error says why that did not help, which is the difference
+        # between "install Tesseract" and "this scan is too long".
+        detail = "Could not extract text from PDF."
+        if extracted.ocr_error:
+            detail = f"{detail} It looks like a scanned document: {extracted.ocr_error}."
+        else:
+            detail = f"{detail} It may be a scanned image, which needs OCR."
+        raise _upload_http_error(filename, detail, code=UPLOAD_NEEDS_OCR)
+
+    if extracted.used_ocr:
+        logger.info(
+            "Upload %s: %d page(s) recovered by OCR, %d unreadable.",
             filename,
-            "Could not extract text from PDF. It may be a scanned image, "
-            "which needs OCR.",
-            code=UPLOAD_NEEDS_OCR,
+            extracted.ocr_pages,
+            len(extracted.unreadable_pages),
         )
 
     segments = segment_text(full_text, layout_lines)
@@ -524,6 +535,23 @@ async def _try_recover_startup() -> None:
             logger.exception("Stale-run recovery failed (continuing).")
 
 
+def _ocr_status() -> dict[str, Any]:
+    """Whether a scanned PDF can be read on this deployment.
+
+    ``enabled`` is the setting, ``available`` is the Tesseract binary;
+    scanned uploads only work when both are true, and the smoke test
+    keys its OCR assertions off this.
+    """
+    available = ocr_available()
+    return {
+        "enabled": settings.OCR_ENABLED,
+        "available": available,
+        "usable": settings.OCR_ENABLED and available,
+        "max_pages": settings.OCR_MAX_PAGES,
+        "dpi": settings.OCR_DPI,
+    }
+
+
 @app.get("/api/health", response_model=HealthResponse)
 async def health(
     response: Response,
@@ -560,6 +588,7 @@ async def health(
         auto_analyze_on_upload=settings.AUTO_ANALYZE_ON_UPLOAD,
         max_upload_mb=settings.max_upload_mb,
         classifier=classifier_info(),
+        ocr=_ocr_status(),
         startup_error=startup_error,
     )
 
@@ -753,6 +782,7 @@ async def metrics(
             "model": settings.DSPY_MODEL,
             "concurrency": settings.ANALYZE_CONCURRENCY,
             "max_retries": settings.ANALYZE_MAX_RETRIES,
+            "ocr": _ocr_status(),
             # AC §4: active DSPy program version + optimizer history.
             "dspy_program": program_identity(),
             "optimizer_history": optimizer_history_info(),

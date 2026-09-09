@@ -37,25 +37,31 @@ no API key it runs in offline demo mode; pasting a real `OPENAI_API_KEY` into
 | **Deploy-ready images**: reproducible lockfile install, pinned spaCy model layer, non-root, IPv4+IPv6 listener, `$PORT`, health that fails loudly (503), database retry at boot, Railway config-as-code (`backend/railway.json`, `frontend/railway.json`) and runbook (`docs/DEPLOY.md`) | ✅ |
 | **spaCy model-size ablation**: `en_core_web_sm` serves the classifier at a 0.001 macro-F1 cost vs `en_core_web_lg` (official LEDGAR test split, n=10 000) for a third of the memory — now the default | ✅ |
 | **Hebrew UI + RTL (Layer 1)**: cookie-based EN/HE switch, `<html lang dir>` from the root layout, Heebo font, typed dictionaries (`frontend/src/i18n`), Hebrew findings and localized API errors via stable error codes (`backend/error_codes.py`); contract text and AI output stay English and render as isolated LTR blocks | ✅ |
+| **OCR for scanned PDFs**: pages with no text layer are rendered and read with Tesseract inside `pdf_extract`, in document order, capped at `OCR_MAX_PAGES`; digital pages are never re-OCR'd, and a deployment without Tesseract degrades to the previous clear refusal | ✅ |
 | **Evaluation completeness**: p99 latency, summary readability (AC-P04), the Layer 1 held-out confusion matrix and per-class precision/recall, one annotation format serving both the segmentation benchmark and the risk labels (`backend/eval/`, see its README), AC-R05 risk scaffolding that refuses to publish unmeasured numbers, and DSPy program identity + optimizer history — all surfaced on the dashboard in both locales | ✅ |
 
 ### Verification evidence (2026-09-09)
 
 | Check | Result |
 |---|---|
-| Backend unit tests (`pytest tests/`) | 291 passing, 1 skipped (the private-corpus test) |
+| Backend unit tests (`pytest tests/`) | 303 passing, 3 skipped (private corpus, and OCR where Tesseract is absent) |
 | ML training tests (`pytest ml_training/tests/`) | 19 passing |
-| End-to-end smoke test (`smoke_test.py`) against the full Docker stack — through the Next rewrite (`:3000`) **and** directly (`:8000`) | 63 + 63 checks passing |
+| End-to-end smoke test (`smoke_test.py`) against the full Docker stack, through the Next rewrite | 73 checks passing, including a scanned image-only PDF read by OCR |
 | Database stopped under the running API → `/api/health` | `503`, back to `200` when the database returns |
 | Container identity | `uid=10001(app)`, listening on `0.0.0.0` and `[::]` |
 | Frontend `tsc` / `eslint` / `next build` | clean (dictionary parity is type-checked) |
 | Hebrew/RTL live check (dev server + browser) | `lang=he dir=rtl`, Heebo applied, he-IL dates, English clause/summary blocks LTR, mirrored disclosure glyph, no horizontal overflow at 375 px |
 | Migration drift (`alembic check`) | none |
 | spaCy ablation (`07_spacy_model_ablation.py`, sm / md / lg) | served macro-F1 0.8801 / 0.8808 / 0.8811; RSS 328 / 527 / 902 MB |
+| GitHub Actions CI | all four jobs green (`Backend`, `API image`, `Web image`, `Frontend`) |
 
-Two independent adversarial reviews were run against the build earlier (a
-5-dimension backend/security/data pass and a deep frontend-correctness
-pass). Every confirmed finding was fixed and regression-tested.
+Four adversarial reviews have been run against this build (backend/security,
+frontend correctness, the Hebrew/RTL layer, and the evaluation harness). Each
+finding was independently checked by two skeptics before being accepted; every
+confirmed one was fixed and locked with a regression test. The evaluation pass
+found two ways the harness could have flattered its own numbers — a cache key
+that ignored the compiled prompt, and a report that published a score over a
+silently shrunken sample — which is exactly what that review existed to catch.
 
 ---
 
@@ -72,7 +78,7 @@ verification set and one commit on `main`.
 | 2 | Hebrew UI + RTL (Layer 1: Hebrew interface for English contracts; findings and API errors translated; LLM output stays English) | — | ✅ done |
 | 3 | Evaluation & dashboard completeness that needs no key: p99, readability (AC-P04), L1 confusion matrix, one annotation format for the real-contract corpus, segmentation boundary P/R gate, risk-eval scaffolding (AC-R05), DSPy program identity + optimizer history plumbing | **you:** ~10 anonymized contracts in `backend/eval/corpus/` (gitignored) | ✅ built — awaiting your contracts to produce numbers |
 | 4 | Key-gated LLM work: real-path validation, optimizer upgrade (judge metric, 24+ examples, valset, before/after harness), AC-R05 end-to-end | **you:** `OPENAI_API_KEY` in `backend/.env` and on Railway + a spend cap | ⏳ |
-| 5 | OCR for scanned PDFs (Tesseract via PyMuPDF, page cap, inline) | — | ⏳ |
+| 5 | OCR for scanned PDFs (Tesseract via PyMuPDF, page cap, inline) | — | ✅ done |
 
 ### Only you can do these
 - **Create the Railway project** and paste the variables — the click-path is
@@ -136,6 +142,10 @@ Short versions; the README has the details.
   changes.** The image installs from the lock; a dependency added only to
   `requirements.txt` (this happened with `argon2-cffi`) crash-loops the
   container while the dev venv keeps working.
+- **OCR runs inside the upload request**, so it is capped (`OCR_MAX_PAGES`,
+  default 20). That is a deliberate exception to AC-API01's 5s p95 for
+  scanned input only; moving extraction behind the run model is the
+  upgrade path if scan volume ever justifies it.
 - **PDF text extraction lives in exactly one place** (`backend/pdf_extract.py`).
   The gold annotations of the evaluation corpus are anchored to the text that
   function returns, so a second extraction path would silently invalidate the

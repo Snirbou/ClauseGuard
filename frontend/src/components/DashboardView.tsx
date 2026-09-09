@@ -152,7 +152,11 @@ export default function DashboardView() {
   );
 
   // --- Held-out evaluation ------------------------------------------------
-  const evaluation = classifier.eval;
+  // The held-out report describes the trained artifact. In keyword-fallback
+  // mode that artifact is not the thing answering requests, so showing its
+  // scores next to "no test metrics are available" would contradict itself —
+  // and imply a quality the running classifier does not have.
+  const evaluation = classifier.mode === "model" ? classifier.eval : undefined;
   const evalLabels = evaluation?.labels?.length
     ? evaluation.labels
     : Object.keys(evaluation?.per_class ?? {});

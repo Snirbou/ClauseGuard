@@ -78,6 +78,10 @@ integration is the CD).
   up (`main._init_db_with_retry`).
 - Alembic runs at startup (`database.init_db → upgrade head`); a fresh
   database reaches the current schema on the first boot.
+- Tesseract is installed in the image, so scanned PDFs are read rather than
+  refused. `/api/health` reports `ocr.usable`; if it is ever false on a
+  deployment, image-only uploads fall back to the old clear refusal instead
+  of failing strangely.
 
 ## 3. Operations
 
