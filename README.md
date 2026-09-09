@@ -184,7 +184,8 @@ one, so a missing key is a compile error.
 | `db_writer.py`, `models.py`, `database.py`, `config.py` | Persistence + settings |
 | `alembic/` | Migrations (startup runs `upgrade head`; pre-Alembic DBs are stamped) |
 | `ml_training/` | Isolated training sandbox for the classifier artifact |
-| `eval/` | Real-contract benchmark: annotation format, segmentation gate, AC-R05 (see its README) |
+| `eval/` | Real-contract benchmark (annotation format, segmentation gate, AC-R05) and the Layer 2 prompt-program benchmark (24-example trainset, before/after harness and its artifact gate) — see its README |
+| `judge.py` | Faithfulness judge for the optimizer metric: reads clause and summary side by side, memoised, never raises |
 | `eval_info.py` | Serves the committed risk-evaluation sidecar to the dashboard |
 | `smoke_test.py` | 73-check end-to-end verification |
 
@@ -207,6 +208,7 @@ one, so a missing key is a compile error.
 
 - `docs/STATUS.md` — **start here**: what exists today, what remains, how
   to verify, and the housekeeping that has been done.
-- `docs/ROADMAP.md` — the technical review this build executed, plus what's
-  deliberately deferred (deployment, OCR, Hebrew/RTL, DSPy optimizer upgrade).
+- `docs/ROADMAP.md` — the technical review this build executed, plus what it
+  deferred at the time (deployment, OCR, Hebrew/RTL, the DSPy optimizer
+  upgrade — all since built; `docs/STATUS.md` is the current picture).
 - `PRD/` — product requirements, data model, acceptance criteria.

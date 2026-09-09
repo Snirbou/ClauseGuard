@@ -205,6 +205,72 @@ re-runs and the sweep cost nothing. Deleting it only costs another LLM pass.
 
 ---
 
+## Layer 2 prompt program (Phase 4)
+
+The other benchmark in this directory is not about real contracts at all.
+`dspy_trainset.json` and `dspy_eval.py` measure the **prompt program** —
+the DSPy signature that turns a clause into a summary, risk factors and a
+risk score — and decide whether a compiled version of it is allowed to ship.
+
+### The trainset
+
+`dspy_trainset.json` holds 24 synthetic clauses, three per CG8 clause type
+(benign / moderate / harsh), each with a gold plain-language summary, risk
+factors and a 0–1 risk score. Every clause was composed for this file in
+the ordinary register of freelance agreements; none is copied from a real
+or published contract, and none comes from `corpus/`. Each row was reviewed
+on three lenses before it landed — no advice-giving language, every claim
+traceable to the clause text, and a score consistent with the calibration
+anchors — and `tests/test_optimizer_metric.py` re-asserts the mechanical
+half of that on every run (UPL-clean, readable, in-range, distinct).
+
+`optimizer.load_split()` holds out one example per type: **16 train / 8
+val**, both halves covering all eight types, no shuffling. That explicit
+split matters more than it looks. Before Phase 4 the optimizer received no
+valset, and MIPROv2's rule in that case is `valset = trainset[-80%:]` — so
+against the five built-in examples it optimized against **one** clause and
+scored on the other four.
+
+### The metric
+
+`optimizer.judge_metric` replaced a metric whose summary component was
+"longer than 30 characters". It gates first — any prescriptive phrasing
+(`upl.violations`) scores 0.0, because AC-P02 is not something the
+optimizer may trade away — then weights faithfulness 0.45 (an LLM judge,
+`judge.SummaryFaithfulness`, reads clause and summary side by side), risk
+score proximity 0.25, risk-factor sanity 0.20 and Flesch-Kincaid
+readability 0.10. A judge failure renormalises over the other components
+and logs a warning rather than scoring the candidate 0.
+
+### The before/after gate
+
+```powershell
+# from backend/ — plumbing check, no key, never gated
+venv\Scripts\python.exe eval\dspy_eval.py --provider fake --program none
+
+# the real measurement, once OPENAI_API_KEY is in backend/.env
+venv\Scripts\python.exe eval\dspy_eval.py --provider openai --program none
+venv\Scripts\python.exe run_pipeline.py --mock --optimize-mipro
+venv\Scripts\python.exe eval\dspy_eval.py --provider openai --program optimized_pipeline.json --gate
+```
+
+Both runs merge into `results/dspy_before_after.json` (scores and counts
+only, no text). `--gate` exits 2 if the compiled program did not match or
+beat the baseline on the held-out split, exits 3 if either side had
+prediction errors, and is ignored under `--provider fake`. The rule the
+project committed to: **`optimized_pipeline.json` is committed only when
+the gate passes.** The optimizer's own `best_score` is not the number that
+decides — it is the maximum of ten trials selected on that very metric,
+and quoting it would be quoting the selection.
+
+A fake-provider run is marked `measured: false`, exactly as in
+`risk_eval.py`. It is still informative once: the demo analyzer's canned
+summary cites a character count the clause never contains, so the old
+metric scores it 0.73 and `judge_metric` scores it 0.35 — the two metrics
+disagreeing about the same text is the reason the metric was replaced.
+
+---
+
 ## Layout
 
 ```
@@ -213,8 +279,10 @@ eval/
   annotate.py            draft a gold file from the current segmentation
   segmentation_eval.py   boundary P/R/F1, coverage, Layer 1 accuracy, the gate
   risk_eval.py           AC-R05, reads high_risk from the same gold files
+  dspy_trainset.json     24 synthetic clauses with gold labels, 3 per CG8 type
+  dspy_eval.py           Layer 2 before/after harness and the artifact gate
   corpus/                real contracts + gold files — GITIGNORED
-  results/               committed metrics only
+  results/               committed metrics only (dspy_before_after.json lives here)
 ```
 
 `eval/__init__.py` is deliberately cheap to import (stdlib plus

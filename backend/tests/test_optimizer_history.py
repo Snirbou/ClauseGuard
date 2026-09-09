@@ -263,7 +263,7 @@ def test_record_run_safely_writes_baseline_best_and_artifact(
     latest = optimizer.optimizer_history_info()["latest"]
     assert latest["optimizer"] == "MIPROv2"
     assert latest["auto"] == "light"
-    assert latest["metric"] == "quality_metric"
+    assert latest["metric"] == "judge_metric"
     assert latest["trainset_size"] == len(optimizer.TRAIN_DATA)
     assert latest["valset_size"] == 0
     assert latest["baseline_score"] == 0.4

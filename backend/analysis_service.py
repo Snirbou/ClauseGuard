@@ -165,7 +165,12 @@ def _build_analyzer():
 # Bump when scoring.py, the DSPy signature, or the sanitize/pain-point logic
 # changes in a way that should invalidate cached per-clause results.
 # "4": the program tag became content-addressed (sha256 of the artifact).
-_PIPELINE_VERSION = "4"
+# "5": _parse_risk_score read "1.0" as 0.0 (it matched the ".0" substring),
+#      so any cached clause whose model answer was 1.0 or 1.00 carries the
+#      lowest score instead of the highest; the task LM is also pinned to
+#      temperature 0, so cached text from sampled runs is no longer what the
+#      pipeline would produce.
+_PIPELINE_VERSION = "5"
 
 
 def _optimized_program_tag() -> str:

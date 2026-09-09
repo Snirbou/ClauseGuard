@@ -96,6 +96,23 @@ class ClauseAnalyzerV2(dspy.Module):
 # 3. LLM Configuration
 # ---------------------------------------------------------------------------
 
+# DSPy 3.3 leaves `dspy.LM(temperature=None)`, which omits the parameter and
+# lets the provider default apply — 1.0 for OpenAI. Two things depend on the
+# task LM being deterministic instead:
+#
+#   * clause results are cached by a content hash (analysis_service), so a
+#     sampled answer makes the same clause return different text on a cache
+#     miss than it did on the run that populated the cache;
+#   * optimizer trial scores are only comparable to each other when the
+#     variation between them comes from the prompt, not from sampling.
+#
+# This does not flatten MIPROv2's instruction search: its proposer builds its
+# own LM at `init_temperature` (1.0) and swaps it in with `dspy.context`
+# (dspy/propose/grounded_proposer.py), so candidate instructions stay diverse
+# while the program being scored stays deterministic.
+TASK_TEMPERATURE = 0.0
+
+
 def configure_lm(
     provider: str = "openai",
     model: str = "gpt-4o-mini",
@@ -111,6 +128,7 @@ def configure_lm(
         lm = dspy.LM(
             model=f"openai/{model}",
             api_key=resolved_key,
+            temperature=TASK_TEMPERATURE,
         )
 
     elif provider == "ollama":
@@ -126,6 +144,7 @@ def configure_lm(
             model=f"ollama_chat/{model}",
             api_base=resolved_base_url,
             api_key="",
+            temperature=TASK_TEMPERATURE,
         )
 
     else:
@@ -151,20 +170,45 @@ def _parse_risk_factors(raw: str) -> list[str]:
     return [item for item in items if item]
 
 
+# Any decimal or integer, including a bare fractional form like ".85".
+_NUMBER = re.compile(r"\d*\.\d+|\d+")
+
+#: Returned when the model's answer contains no number at all. Deliberately
+#: mid-scale: an unparseable answer is unknown risk, not low risk.
+UNPARSEABLE_RISK_SCORE = 0.5
+
+
 def _parse_risk_score(raw: str) -> float:
-    """Extract float from LLM output, clamp to 0.0-1.0."""
+    """Extract the risk score from the model's answer, clamped to 0.0-1.0.
+
+    The previous pattern was ``0?\\.\\d+``, which made the optional leading
+    zero match nothing and let the search start mid-number: on the answer
+    "1.0" it matched the substring ".0" and returned **0.0**. The highest
+    possible risk score parsed as the lowest one, and silently — the value is
+    in range, so nothing downstream could notice. "1.00" failed the same way.
+
+    Reading the whole number fixes that. Preferring a candidate already in
+    [0, 1] keeps a prose answer like "clause 3.2 scores 0.4" from latching
+    onto the section number, and a trailing "%" is read as a percentage
+    because a model asked for 0-1 that answers "85%" means 0.85, not 1.0.
+    """
     try:
-        # Find first number sequence that looks like a float
-        match = re.search(r"0?\.\d+", raw)
-        if match:
-            val = float(match.group(0))
-        else:
-            # Fallback if it just returned an integer
-            match_int = re.search(r"[01]", raw)
-            val = float(match_int.group(0)) if match_int else 0.5
-    except Exception:
-        val = 0.5
-    return max(0.0, min(1.0, val))
+        text = raw if isinstance(raw, str) else str(raw)
+        candidates = [float(token) for token in _NUMBER.findall(text)]
+    except (TypeError, ValueError):
+        return UNPARSEABLE_RISK_SCORE
+
+    if not candidates:
+        return UNPARSEABLE_RISK_SCORE
+
+    in_range = [value for value in candidates if 0.0 <= value <= 1.0]
+    if in_range:
+        return in_range[0]
+
+    value = candidates[0]
+    if "%" in text:
+        value /= 100.0
+    return max(0.0, min(1.0, value))
 
 
 def _score_to_level(score: float) -> str:

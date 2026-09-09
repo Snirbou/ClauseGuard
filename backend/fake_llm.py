@@ -18,6 +18,7 @@ can never be mistaken for real analysis.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 
 # Deterministic per-type base risk, tuned so a typical contract shows a mix
@@ -78,3 +79,34 @@ class FakeAnalyzer:
             risk_factors=factors_text,
             dspy_risk_score=f"{score:.2f}",
         )
+
+
+_NUMBER_TOKEN = re.compile(r"\d+(?:[.,]\d+)?")
+
+
+@dataclass
+class _FakeVerdict:
+    faithful: bool
+    unsupported_claims: list[str]
+
+
+class FakeFaithfulnessJudge:
+    """Offline twin of ``judge.SummaryFaithfulness`` for ``DSPY_PROVIDER=fake``.
+
+    Installed by the evaluation harness so the optimizer metric can be
+    exercised end to end without an LM. The heuristic is deliberately narrow
+    and deterministic: a summary is "faithful" when every number it mentions
+    also appears in the clause. That catches the one class of fabrication a
+    regex can see — an invented amount, day count or percentage — and
+    nothing else, which is exactly what a plumbing test needs and exactly
+    why its verdicts are labelled ``measured: false`` in any report.
+    """
+
+    def __call__(self, clause_text: str, summary: str) -> _FakeVerdict:
+        clause_numbers = {token.replace(",", "") for token in _NUMBER_TOKEN.findall(clause_text)}
+        invented = [
+            token
+            for token in _NUMBER_TOKEN.findall(summary)
+            if token.replace(",", "") not in clause_numbers
+        ]
+        return _FakeVerdict(faithful=not invented, unsupported_claims=invented)

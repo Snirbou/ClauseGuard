@@ -19,8 +19,11 @@ from typing import Any
 import dspy
 from dspy.teleprompt import BootstrapFewShot, MIPROv2
 
+import upl
 from dspy_pipeline import ClauseAnalyzerV2, _parse_risk_factors, _parse_risk_score
+from judge import judge_faithfulness
 from logger import get_logger
+from readability import DEFAULT_TARGET_GRADE, flesch_kincaid_grade
 
 logger = get_logger(__name__)
 
@@ -34,16 +37,20 @@ OPTIMIZER_HISTORY_PATH = os.path.join(
 )
 
 
-def optimized_program_tag() -> str:
+def optimized_program_tag(path: str | None = None) -> str:
     """Identity of the compiled program for cache keys and the dashboard.
 
     A truncated sha256 of the artifact bytes: git does not preserve file
     mtimes, so an mtime-based tag would invalidate every cached clause
     result on each fresh clone. ``opt:none`` when no compiled program
     exists (the unoptimized signature is in use).
+
+    ``path`` names a specific artifact; the default is the one the app
+    loads. The evaluation harness passes an explicit path so a report can
+    record which artifact produced it.
     """
     try:
-        with open(OPTIMIZED_PROGRAM_PATH, "rb") as handle:
+        with open(path or OPTIMIZED_PROGRAM_PATH, "rb") as handle:
             digest = hashlib.sha256(handle.read()).hexdigest()
     except OSError:
         return "opt:none"
@@ -141,6 +148,252 @@ def quality_metric(example: dspy.Example, pred: dspy.Prediction, trace: any = No
 
 
 # ---------------------------------------------------------------------------
+# 2b. judge_metric — what the optimizer actually optimizes
+# ---------------------------------------------------------------------------
+#
+# quality_metric above is kept as the pre-Phase-4 baseline so the before/after
+# harness (eval/dspy_eval.py) can report both numbers. It is not used to
+# compile anything any more, and the reason is its first component: a summary
+# scored 0.4 out of 1.0 for being longer than 30 characters. Optimizing
+# against that rewards verbosity and is blind to whether the summary is true,
+# so a fluent hallucination outscored a short accurate answer.
+#
+# judge_metric replaces the length check with four signals that a contract
+# summary actually has to satisfy, and one gate it must not fail.
+
+# Weights sum to 1.0. Faithfulness carries the most because an unfaithful
+# summary of a contract clause is worse than an unreadable one.
+W_FAITHFUL = 0.45
+W_RISK_SCORE = 0.25
+W_FACTORS = 0.20
+W_READABILITY = 0.10
+
+# DSPy calls a metric with trace set during bootstrapping and expects a
+# pass/fail there rather than a score. A demo has to clear this bar to be
+# kept as a few-shot example.
+JUDGE_PASS_THRESHOLD = 0.7
+
+# Flesch-Kincaid grade at or below this earns the full readability weight.
+# Imported from readability so the metric and /api/metrics can never
+# disagree about where AC-P04's bar sits; the award decays to zero by
+# GRADE_FLOOR.
+GRADE_TARGET = DEFAULT_TARGET_GRADE
+GRADE_FLOOR = GRADE_TARGET + 4.0
+
+_judge_unavailable_logged = False
+
+
+def _readability_award(summary: str) -> float | None:
+    """Fraction of the readability weight this summary earns, or None.
+
+    None means the grade could not be computed (too short to have a sentence),
+    which is a measurement gap rather than a bad summary.
+    """
+    grade = flesch_kincaid_grade(summary)
+    if grade is None:
+        return None
+    if grade <= GRADE_TARGET:
+        return 1.0
+    if grade >= GRADE_FLOOR:
+        return 0.0
+    return (GRADE_FLOOR - grade) / (GRADE_FLOOR - GRADE_TARGET)
+
+
+def _risk_score_award(example: dspy.Example, pred: dspy.Prediction) -> float:
+    """Fraction of the risk-score weight earned by numeric proximity."""
+    try:
+        predicted = float(_parse_risk_score(pred.dspy_risk_score))
+        expected = float(example.dspy_risk_score)
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
+    if not 0.0 <= predicted <= 1.0:
+        return 0.0
+    diff = abs(predicted - expected)
+    if diff <= 0.2:
+        return 1.0
+    if diff <= 0.4:
+        return 0.5
+    return 0.0
+
+
+def _factor_award(example: dspy.Example, pred: dspy.Prediction) -> float:
+    """Fraction of the factor weight earned by risk-factor sanity."""
+    try:
+        predicted = _parse_risk_factors(pred.risk_factors)
+    except (AttributeError, TypeError):
+        return 0.0
+    expected_raw = str(getattr(example, "risk_factors", "") or "").strip().lower()
+    said_none = not predicted or predicted[0].strip().lower() == "none"
+
+    if expected_raw in {"", "none"}:
+        # The gold label says this clause is clean. Inventing risks for a
+        # benign clause is the failure mode being penalised here.
+        return 1.0 if said_none else 0.0
+    return 0.0 if said_none else 1.0
+
+
+def judge_metric(
+    example: dspy.Example, pred: dspy.Prediction, trace: Any = None
+) -> float | bool:
+    """Score one prediction in [0, 1]; a bool when DSPy passes a trace.
+
+    Gate first: any prescriptive phrasing scores 0.0 regardless of how good
+    the rest of the answer is. AC-P02 requires zero advice-style language in
+    user-facing output, so a candidate program that produces it is not a
+    candidate at all, and a partial score would let the optimizer trade UPL
+    safety against readability.
+    """
+    global _judge_unavailable_logged
+
+    summary = str(getattr(pred, "plain_language_summary", "") or "").strip()
+    if not summary or upl.violations(summary):
+        return False if trace is not None else 0.0
+
+    awards: list[tuple[float, float]] = []  # (weight, fraction earned)
+
+    verdict = judge_faithfulness(str(getattr(example, "raw_text", "") or ""), summary)
+    if verdict.judged:
+        awards.append((W_FAITHFUL, 1.0 if verdict.faithful else 0.0))
+    elif not _judge_unavailable_logged:
+        # Renormalising over the remaining components keeps candidates
+        # comparable to each other; it does not make the run comparable to a
+        # judged one, so say so loudly and exactly once.
+        _judge_unavailable_logged = True
+        logger.warning(
+            "Faithfulness judge unavailable — scoring on the remaining "
+            "components only. These scores are NOT comparable to a run with "
+            "the judge active."
+        )
+
+    awards.append((W_RISK_SCORE, _risk_score_award(example, pred)))
+    awards.append((W_FACTORS, _factor_award(example, pred)))
+
+    readability = _readability_award(summary)
+    if readability is not None:
+        awards.append((W_READABILITY, readability))
+
+    total_weight = sum(weight for weight, _ in awards)
+    if total_weight <= 0:
+        return False if trace is not None else 0.0
+
+    score = sum(weight * earned for weight, earned in awards) / total_weight
+    if trace is not None:
+        return score >= JUDGE_PASS_THRESHOLD
+    return score
+
+
+# ---------------------------------------------------------------------------
+# 2c. Trainset loading and the train/val split
+# ---------------------------------------------------------------------------
+
+TRAINSET_PATH = os.path.join(os.path.dirname(__file__), "eval", "dspy_trainset.json")
+
+# Examples per clause type that go to validation. The file carries three
+# examples of each of the eight CG8 types, so 1 held out per type gives a
+# 16/8 split in which BOTH halves cover all eight types. A random split of 24
+# would routinely leave a type out of one side and make the val score depend
+# on which types happened to land there.
+VAL_PER_TYPE = 1
+
+# Fixed so two runs of the same optimizer over the same trainset explore the
+# same candidate sequence. Without it a before/after comparison confounds the
+# change being measured with a different random search path.
+MIPRO_SEED = 20260909
+
+_EXAMPLE_FIELDS = (
+    "raw_text",
+    "clause_type",
+    "plain_language_summary",
+    "risk_factors",
+    "dspy_risk_score",
+)
+
+
+def _to_example(row: dict[str, Any]) -> dspy.Example:
+    missing = [f for f in _EXAMPLE_FIELDS if not str(row.get(f, "")).strip()]
+    if missing:
+        raise ValueError(f"trainset row is missing {', '.join(missing)}: {row!r}")
+    return dspy.Example(**{f: str(row[f]) for f in _EXAMPLE_FIELDS}).with_inputs(
+        "raw_text", "clause_type"
+    )
+
+
+def load_trainset(path: str | None = None) -> list[dspy.Example]:
+    """Every example in the trainset file, in file order.
+
+    Falls back to the five in-module TRAIN_DATA examples when the file is
+    absent, so the optimizer CLI still runs on a checkout that predates it.
+    """
+    resolved = path or TRAINSET_PATH
+    try:
+        with open(resolved, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except FileNotFoundError:
+        logger.warning(
+            "No trainset at %s — falling back to the %d built-in examples.",
+            resolved,
+            len(TRAIN_DATA),
+        )
+        return list(TRAIN_DATA)
+
+    rows = payload.get("examples", payload) if isinstance(payload, dict) else payload
+    if not isinstance(rows, list) or not rows:
+        raise ValueError(f"{resolved} contains no examples")
+    return [_to_example(row) for row in rows]
+
+
+def split_examples(
+    examples: list[dspy.Example], val_per_type: int = VAL_PER_TYPE
+) -> tuple[list[dspy.Example], list[dspy.Example]]:
+    """Stratified (trainset, valset). Deterministic — no shuffling.
+
+    The last ``val_per_type`` examples of each clause type go to validation.
+    Determinism matters: a before/after comparison is only meaningful when
+    both sides are scored on the same held-out examples.
+    """
+    seen: dict[str, int] = {}
+    counts: dict[str, int] = {}
+    for example in examples:
+        counts[example.clause_type] = counts.get(example.clause_type, 0) + 1
+
+    trainset: list[dspy.Example] = []
+    valset: list[dspy.Example] = []
+    for example in examples:
+        clause_type = example.clause_type
+        index = seen.get(clause_type, 0)
+        seen[clause_type] = index + 1
+        holdout_starts_at = max(1, counts[clause_type] - val_per_type)
+        if index >= holdout_starts_at:
+            valset.append(example)
+        else:
+            trainset.append(example)
+
+    if valset:
+        return trainset, valset
+
+    # Every clause type had a single example, so nothing could be held out
+    # without emptying a type from the trainset. That is the shape of the
+    # five built-in TRAIN_DATA fallbacks, not of the real trainset file.
+    # Degrade to a deterministic tail split rather than handing MIPROv2 a
+    # None valset, which would silently take 80% of the trainset.
+    if len(examples) < 2:
+        raise ValueError("need at least 2 examples to build a validation split")
+    cutoff = len(examples) - max(1, len(examples) // 3)
+    logger.warning(
+        "No clause type had a spare example to hold out; falling back to a "
+        "tail split of %d train / %d val.",
+        cutoff,
+        len(examples) - cutoff,
+    )
+    return list(examples[:cutoff]), list(examples[cutoff:])
+
+
+def load_split(path: str | None = None) -> tuple[list[dspy.Example], list[dspy.Example]]:
+    """The (trainset, valset) the optimizer and the eval harness both use."""
+    return split_examples(load_trainset(path))
+
+
+# ---------------------------------------------------------------------------
 # 3. Optimization Workflows
 # ---------------------------------------------------------------------------
 
@@ -151,9 +404,13 @@ def run_bootstrap_fewshot() -> dspy.Module:
     """
     logger.info("Starting BootstrapFewShot optimization...")
     analyzer = ClauseAnalyzerV2()
-    
+    trainset, _valset = load_split()
+
     teleprompter = BootstrapFewShot(
-        metric=quality_metric,
+        metric=judge_metric,
+        # judge_metric already returns pass/fail when DSPy passes a trace;
+        # stating the same bar here keeps the two paths visibly identical.
+        metric_threshold=JUDGE_PASS_THRESHOLD,
         max_bootstrapped_demos=3,
         max_labeled_demos=5,
     )
@@ -161,7 +418,7 @@ def run_bootstrap_fewshot() -> dspy.Module:
     started_at = _utc_now_iso()
     optimized_analyzer = teleprompter.compile(
         analyzer,
-        trainset=TRAIN_DATA,
+        trainset=trainset,
     )
 
     optimized_analyzer.save(OPTIMIZED_PROGRAM_PATH)
@@ -171,6 +428,7 @@ def run_bootstrap_fewshot() -> dspy.Module:
         optimizer="BootstrapFewShot",
         auto=None,
         started_at=started_at,
+        trainset_size=len(trainset),
         notes="BootstrapFewShot keeps no trial scores; only the demo selection is recorded.",
     )
     return optimized_analyzer
@@ -183,17 +441,44 @@ def run_miprov2() -> dspy.Module:
     """
     logger.info("Starting MIPROv2 optimization (this may take a while)...")
     analyzer = ClauseAnalyzerV2()
-    
-    # MIPROv2 requires a separate prompter LM. We use the currently configured one.
-    teleprompter = MIPROv2(
-        metric=quality_metric,
-        auto="light", # 'light' does ~50-60 trials. 'heavy' does ~300.
+    trainset, valset = load_split()
+    logger.info(
+        "Trainset %d examples / valset %d examples, stratified over %d clause types.",
+        len(trainset),
+        len(valset),
+        len({e.clause_type for e in trainset}),
     )
-    
+
+    # MIPROv2 requires a separate prompter LM. We use the currently configured one.
+    # auto="light" is 10 trials for this single-predictor program in DSPy
+    # 3.3 (MIPROv2._set_num_trials_from_num_candidates with n=6), not the
+    # "~50-60" an older comment here claimed. With 8 validation examples and
+    # one judge call per scored prediction that is a few hundred gpt-4o-mini
+    # calls end to end — well under a dollar.
+    teleprompter = MIPROv2(
+        metric=judge_metric,
+        auto="light",
+        seed=MIPRO_SEED,
+    )
+
     started_at = _utc_now_iso()
     optimized_analyzer = teleprompter.compile(
         analyzer,
-        trainset=TRAIN_DATA,
+        trainset=trainset,
+        # DSPy's auto mode already disables minibatching for a valset this
+        # small (its threshold is 50), but it validates `minibatch_size <=
+        # len(valset)` right after, and the default batch is 35. Saying
+        # minibatch=False outright means a reorder of those two steps in a
+        # future DSPy cannot turn this into a ValueError after the key has
+        # already paid for the bootstrap round.
+        minibatch=False,
+        # Passing the valset explicitly is not cosmetic. MIPROv2 derives one
+        # when it is omitted, and its rule is `valset = trainset[-80%:]`
+        # (dspy/teleprompt/mipro_optimizer_v2.py::_set_and_validate_datasets).
+        # Against the five built-in examples that left a trainset of ONE —
+        # every compiled program in this repo before Phase 4 was optimized
+        # against a single ip_assignment clause and scored on the other four.
+        valset=valset,
         # `num_batches` was removed from MIPROv2.compile() in DSPy 3.x and
         # passing it raised TypeError before the optimizer could run.
         max_bootstrapped_demos=3,
@@ -208,9 +493,13 @@ def run_miprov2() -> dspy.Module:
         optimizer="MIPROv2",
         auto="light",
         started_at=started_at,
+        trainset_size=len(trainset),
+        valset_size=len(valset),
         notes=(
-            "No explicit valset: MIPROv2 holds out 80% of the trainset internally, "
-            "so trial scores are measured on that split."
+            f"Stratified split from {os.path.basename(TRAINSET_PATH)}: "
+            f"{len(trainset)} train / {len(valset)} val, every CG8 clause type "
+            f"present in both halves. Trial scores are measured on the valset. "
+            f"Metric: judge_metric (seed {MIPRO_SEED})."
         ),
     )
     return optimized_analyzer
@@ -529,6 +818,9 @@ def _record_run_safely(
     optimizer: str,
     auto: str | None,
     started_at: str,
+    trainset_size: int | None = None,
+    valset_size: int = 0,
+    metric: str = "judge_metric",
     notes: str = "",
 ) -> None:
     """Bookkeeping must never fail an optimization that already saved its program."""
@@ -537,9 +829,9 @@ def _record_run_safely(
         record_optimizer_run(
             optimizer=optimizer,
             auto=auto,
-            metric="quality_metric",
-            trainset_size=len(TRAIN_DATA),
-            valset_size=0,
+            metric=metric,
+            trainset_size=len(TRAIN_DATA) if trainset_size is None else trainset_size,
+            valset_size=valset_size,
             baseline_score=_baseline_score(program),
             best_score=_best_score(program, trials),
             artifact_sha=optimized_program_tag(),

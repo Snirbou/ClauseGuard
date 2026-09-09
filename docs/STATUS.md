@@ -39,6 +39,7 @@ no API key it runs in offline demo mode; pasting a real `OPENAI_API_KEY` into
 | **Hebrew UI + RTL (Layer 1)**: cookie-based EN/HE switch, `<html lang dir>` from the root layout, Heebo font, typed dictionaries (`frontend/src/i18n`), Hebrew findings and localized API errors via stable error codes (`backend/error_codes.py`); contract text and AI output stay English and render as isolated LTR blocks | ✅ |
 | **OCR for scanned PDFs**: pages with no text layer are rendered and read with Tesseract inside `pdf_extract`, in document order, capped at `OCR_MAX_PAGES`; digital pages are never re-OCR'd, and a deployment without Tesseract degrades to the previous clear refusal | ✅ |
 | **Evaluation completeness**: p99 latency, summary readability (AC-P04), the Layer 1 held-out confusion matrix and per-class precision/recall, one annotation format serving both the segmentation benchmark and the risk labels (`backend/eval/`, see its README), AC-R05 risk scaffolding that refuses to publish unmeasured numbers, and DSPy program identity + optimizer history — all surfaced on the dashboard in both locales | ✅ |
+| **Optimizer, offline half**: a 24-example synthetic trainset (3 per clause type, reviewed on three lenses), a stratified 16/8 split, `judge_metric` (UPL gate → faithfulness judge 0.45 / risk score 0.25 / factors 0.20 / readability 0.10), a deterministic task LM (temperature 0, fixed MIPROv2 seed), and `eval/dspy_eval.py` — the before/after harness whose `--gate` is the only thing allowed to admit a compiled prompt. Found on the way: the old setup optimized against **one** training example, and `1.0` from the model parsed as `0.0` | ✅ |
 
 ### Verification evidence (2026-09-09)
 
@@ -78,7 +79,7 @@ through a short-lived branch with the four CI jobs green.
 | 1C | Railway deployment (API + web + Postgres), CD on push | **you:** Railway project (see `docs/DEPLOY.md` §1) | ⏳ next |
 | 2 | Hebrew UI + RTL (Layer 1: Hebrew interface for English contracts; findings and API errors translated; LLM output stays English) | — | ✅ done |
 | 3 | Evaluation & dashboard completeness that needs no key: p99, readability (AC-P04), L1 confusion matrix, one annotation format for the real-contract corpus, segmentation boundary P/R gate, risk-eval scaffolding (AC-R05), DSPy program identity + optimizer history plumbing | **you:** ~10 anonymized contracts in `backend/eval/corpus/` (gitignored) | ✅ built — awaiting your contracts to produce numbers |
-| 4 | Key-gated LLM work: real-path validation, optimizer upgrade (judge metric, 24+ examples, valset, before/after harness), AC-R05 end-to-end | **you:** `OPENAI_API_KEY` in `backend/.env` and on Railway + a spend cap | ⏳ |
+| 4 | Key-gated LLM work: real-path validation, optimizer upgrade (judge metric, 24+ examples, valset, before/after harness), AC-R05 end-to-end | **you:** `OPENAI_API_KEY` in `backend/.env` and on Railway + a spend cap | ✅ built offline — the trainset, the judge metric, the stratified split, the before/after harness and its gate all exist and are tested with no key; only the runs themselves wait for it |
 | 5 | OCR for scanned PDFs (Tesseract via PyMuPDF, page cap, inline) | — | ✅ done |
 
 ### Only you can do these
@@ -91,7 +92,16 @@ through a short-lived branch with the four CI jobs green.
   they exist the harness runs and reports "nothing to evaluate"; with them
   it produces the segmentation benchmark and the risk gold set.
 - **The OpenAI key** (Phase 4) — it goes in `backend/.env` / Railway
-  variables, never in chat.
+  variables, never in chat. Set a hard spend cap first (US$10 is plenty:
+  one optimizer run is ten trials over eight validation clauses, a few
+  hundred gpt-4o-mini calls). Then, from `backend/`, in this order:
+  `eval\dspy_eval.py --provider openai --program none` (the baseline),
+  `run_pipeline.py --mock --optimize-mipro` (compiles the prompt),
+  `eval\dspy_eval.py --provider openai --program optimized_pipeline.json --gate`.
+  Commit `optimized_pipeline.json` **only if the gate passes**; then
+  `eval\risk_eval.py --provider openai --cuad 50` for AC-R05, pin
+  `DSPY_PROVIDER=openai` on Railway, and run the smoke test against the
+  public URL on the real path.
 - **Review the Hebrew dictionary** (Phase 2) for tone and UPL-safe phrasing.
 
 ### Explicitly deferred (not built)
