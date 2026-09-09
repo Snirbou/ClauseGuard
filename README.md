@@ -10,6 +10,10 @@ signing them — and just as importantly, flags the protections the contract
 
 ---
 
+**Live:** <https://brave-luck-production-ec42.up.railway.app> — running the
+offline demo analyzer until an API key is configured, so every feature is
+explorable at zero cost.
+
 ## Current status
 
 The product is **feature-complete and works end to end out of the box**. With
