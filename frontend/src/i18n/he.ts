@@ -318,9 +318,90 @@ export const he: Dictionary = {
     failed: "נכשלו",
     p50: "זמן עיבוד p50",
     p95: "זמן עיבוד p95",
+    p99: "זמן עיבוד p99",
     runsHint: "יעד PRD: p95 מקצה לקצה ≤ 60,000ms לחוזים של 5–20 עמודים.",
     complianceTitle: "עמידה בכללי UPL",
     disclaimerViews: "הצגות ההבהרה המשפטית שנרשמו",
+
+    // --- גרסאות המודלים (AC §4) ---
+    versionsTitle: "גרסאות המודלים",
+    versionsHint: "קובץ המודל ותוכנית ה-DSPy שמשרתות בפועל את הבקשות ברגע זה.",
+    classifierArtifact: "קובץ המסווג",
+    spacyTrained: "spaCy באימון",
+    spacyRuntime: "spaCy בריצה",
+    dspyVersion: "גרסת DSPy",
+    pipelineVersion: "גרסת הצינור",
+    dspyProgram: "תוכנית DSPy",
+    programOptimized: "מותאמת",
+    programUnoptimized: "חתימה לא מותאמת",
+
+    // --- הערכה על מדגם מוחזק ---
+    holdoutNote: "ה-F1 לפי מחלקה שלמעלה הוא מדגם ההחזקה מזמן האימון, כפי שנשמר בקובץ המודל.",
+    evalTitle: "הערכה על מדגם מוחזק",
+    evalMeta: (dataset: string, split: string, n: number, spacyModel: string): string =>
+      `${dataset} · ${split} · n=${n} · ${spacyModel}`,
+    evalGenerated: (date: string): string => `נוצר ב-${date}`,
+    evalMacroF1: "Macro F1",
+    evalServedMacroF1: "Macro F1 בפועל",
+    evalThreshold: "סף ביטחון",
+    evalSampleSize: "סעיפים שהוערכו",
+    colClass: "מחלקה",
+    colPrecision: "דיוק",
+    colRecall: "היזכרות",
+    colF1: "F1",
+    colSupport: "מופעים",
+    confusionTitle: "מטריצת בלבול",
+    confusionCorner: "אמת ╲ חיזוי",
+    confusionCaption:
+      "כל שורה היא התווית האמיתית וכל עמודה היא התווית שהמסווג חזה; הצללת התא היא חלקו מתוך השורה, ולכן האלכסון מציג את ההיזכרות של אותה מחלקה.",
+    confusionCellTitle: (
+      trueLabel: string,
+      predictedLabel: string,
+      count: number,
+      share: string,
+    ): string => `אמת ${trueLabel}, חיזוי ${predictedLabel}: ${count} (${share} מהשורה)`,
+
+    // --- קריאות התקצירים (AC-P04) ---
+    readabilityTitle: "קריאות התקצירים",
+    readabilityAvg: "רמת קריאה ממוצעת",
+    readabilityMedian: "חציון",
+    readabilityShare: "בתוך היעד",
+    readabilitySample: "תקצירים שנמדדו",
+    readabilityTarget: (grade: number): string =>
+      `יעד PRD: רמת Flesch-Kincaid ממוצעת ≤ ${grade} (AC-P04)`,
+    readabilityEmpty: "עדיין אין תקצירים מנותחים — טקסט הדגמה אינו נכלל במדידה הזו.",
+
+    // --- זיהוי סיכון גבוה (AC-R05) ---
+    riskTitle: "זיהוי סיכון גבוה",
+    riskTargets: (precision: string, recall: string): string =>
+      `יעדי PRD: דיוק ≥ ${precision}, היזכרות ≥ ${recall} (AC-R05)`,
+    riskPrecision: "דיוק",
+    riskRecall: "היזכרות",
+    riskF1: "F1",
+    riskSample: "סעיפים מתויגים",
+    riskThreshold: "סף לסיכון גבוה",
+    riskNotMeasured: "טרם נמדד — נדרש מפתח LLM (שלב 4).",
+    riskReason: "סיבה:",
+    riskError: "שגיאה בהערכה:",
+    riskCaveats: "הסתייגויות",
+    riskGenerated: (date: string): string => `נמדד ב-${date}`,
+
+    // --- היסטוריית האופטימייזר של DSPy (AC §4) ---
+    optimizerTitle: "היסטוריית האופטימייזר של DSPy",
+    optimizerEmpty: "עדיין לא נרשמה ריצת אופטימייזר.",
+    optimizerPath: "קובץ ההיסטוריה:",
+    colStarted: "התחילה",
+    colOptimizer: "אופטימייזר",
+    colAuto: "מצב",
+    colTrainVal: "אימון / ולידציה",
+    colBaseline: "בסיס",
+    colBest: "הטוב ביותר",
+    colArtifact: "קובץ",
+    colTrialCount: "ניסיונות",
+    trialsTitle: "הריצה האחרונה — ניסיונות",
+    colTrial: "#",
+    colScore: "ציון",
+    colInstruction: "תצוגה מקדימה של ההנחיה",
   },
 
   errorPage: {

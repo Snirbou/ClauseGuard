@@ -162,7 +162,45 @@ export type HealthResponse = {
   startup_error?: string | null;
 };
 
-/** Payload of GET /api/metrics — the evaluation dashboard. */
+/** One class's scores in the held-out evaluation report. */
+type EvalClassMetrics = {
+  precision: number;
+  recall: number;
+  f1: number;
+  support: number;
+};
+
+/** One recorded DSPy optimizer run (`optimizer_history.runs[]`). */
+type OptimizerRun = {
+  run_id: string;
+  started_at: string;
+  finished_at: string;
+  optimizer: string;
+  /** MIPROv2 `auto` preset ("light" | "medium" | "heavy"), null for others. */
+  auto: string | null;
+  metric: string;
+  trainset_size: number;
+  valset_size: number;
+  baseline_score: number | null;
+  best_score: number | null;
+  artifact_sha: string | null;
+  trial_count: number;
+};
+
+/** One candidate the optimizer scored during its search. */
+type OptimizerTrial = {
+  index: number;
+  score: number | null;
+  instruction_preview: string;
+};
+
+/**
+ * Payload of GET /api/metrics — the evaluation dashboard.
+ *
+ * Everything beyond the four original blocks is additive and optional: the
+ * dashboard renders each section from whatever the server sends and falls
+ * back to a placeholder when a block is missing.
+ */
 export type MetricsResponse = {
   status: "success";
   classifier: {
@@ -171,10 +209,37 @@ export type MetricsResponse = {
     load_error?: string;
     artifact?: string;
     trained_at_utc?: string;
+    /** Training-time holdout macro F1 baked into the artifact. */
     test_macro_f1?: number;
     per_class_f1?: Record<string, number>;
     labels?: string[];
     sklearn_version_trained?: string;
+    /** spaCy pipeline asked for by SPACY_MODEL vs the one actually loaded. */
+    spacy_model_configured?: string;
+    spacy_model_runtime?: string;
+    spacy_model_version_runtime?: string;
+    /** spaCy pipeline the artifact was trained against. */
+    spacy_model_trained?: string;
+    spacy_model_version_trained?: string;
+    /** Held-out evaluation report (AC §4): per-class P/R/F1 + confusion matrix. */
+    eval?: {
+      dataset: string;
+      split: string;
+      n: number;
+      spacy_model: string;
+      spacy_model_version: string;
+      labels: string[];
+      macro_f1: number;
+      /** Macro F1 of the served pipeline, including the confidence gate. */
+      served_macro_f1: number;
+      low_confidence_threshold: number;
+      per_class: Record<string, EvalClassMetrics>;
+      /** Rows are the true label, columns the predicted one, in `labels` order. */
+      confusion_matrix: number[][];
+      confusion_matrix_orientation: string;
+      generated_at: string;
+      note?: string;
+    };
   };
   runs: {
     total: number;
@@ -183,12 +248,55 @@ export type MetricsResponse = {
     active: number;
     p50_ms: number | null;
     p95_ms: number | null;
+    p99_ms?: number | null;
+  };
+  /** AC-P04: Flesch-Kincaid grade of the summaries actually served. */
+  quality?: {
+    readability?: {
+      sample_size: number;
+      avg_grade: number | null;
+      median_grade: number | null;
+      share_at_or_below_target: number | null;
+      target_grade: number;
+    };
+  };
+  /** AC-R05: high-risk precision/recall against labeled data. */
+  risk?: {
+    measured: boolean;
+    targets: { precision: number; recall: number };
+    /** Why the evaluation did not run (e.g. no LLM key configured). */
+    reason?: string;
+    error?: string;
+    precision_high?: number;
+    recall_high?: number;
+    f1_high?: number;
+    n?: number;
+    threshold_high?: number;
+    confusion?: Record<string, number>;
+    dataset?: Record<string, number>;
+    provider?: string;
+    model?: string;
+    caveats?: string[];
+    generated_at?: string;
   };
   pipeline: {
     provider: string;
     model: string;
     concurrency: number;
     max_retries: number;
+    /** Identity of the DSPy program actually serving requests. */
+    dspy_program?: {
+      optimized: boolean;
+      artifact_sha: string | null;
+      dspy_version: string;
+      pipeline_version: string;
+      fingerprint: string;
+    };
+    optimizer_history?: {
+      path: string;
+      runs: OptimizerRun[];
+      latest: (OptimizerRun & { trials: OptimizerTrial[] }) | null;
+    };
   };
   compliance: {
     disclaimer_views_logged: number;

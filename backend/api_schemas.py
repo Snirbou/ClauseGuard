@@ -177,13 +177,22 @@ class DisclaimerViewRequest(BaseModel):
 
 
 class MetricsResponse(BaseModel):
-    """Evaluation dashboard payload (AcceptanceCriteria §4)."""
+    """Evaluation dashboard payload (AcceptanceCriteria §4).
+
+    Every block is a free-form dict so fields can be added without breaking
+    older clients; the frontend types (frontend/src/types/contracts.ts)
+    document the current shape.
+    """
 
     status: Literal["success"] = "success"
     classifier: dict[str, Any]
     runs: dict[str, Any]
     pipeline: dict[str, Any]
     compliance: dict[str, Any]
+    # Additive (Phase 3): summary readability (AC-P04) and high-risk
+    # precision/recall (AC-R05); empty dicts when not measured.
+    quality: dict[str, Any] = Field(default_factory=dict)
+    risk: dict[str, Any] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

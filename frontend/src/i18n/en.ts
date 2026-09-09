@@ -283,9 +283,91 @@ export const en = {
     failed: "Failed",
     p50: "p50 latency",
     p95: "p95 latency",
+    p99: "p99 latency",
     runsHint: "PRD target: p95 end-to-end ≤ 60,000ms for 5–20 page contracts.",
     complianceTitle: "UPL compliance",
     disclaimerViews: "Disclaimer views logged",
+
+    // --- Model versions (AC §4: active ML and DSPy program versions) ---
+    versionsTitle: "Model versions",
+    versionsHint: "The ML artifact and DSPy program actually serving requests right now.",
+    classifierArtifact: "Classifier artifact",
+    spacyTrained: "spaCy at training",
+    spacyRuntime: "spaCy at runtime",
+    dspyVersion: "DSPy version",
+    pipelineVersion: "Pipeline version",
+    dspyProgram: "DSPy program",
+    programOptimized: "Optimized",
+    programUnoptimized: "Unoptimized signature",
+
+    // --- Held-out evaluation of the clause classifier ---
+    holdoutNote: "Per-class F1 above is the training-time holdout baked into the artifact.",
+    evalTitle: "Held-out evaluation",
+    evalMeta: (dataset: string, split: string, n: number, spacyModel: string): string =>
+      `${dataset} · ${split} · n=${n} · ${spacyModel}`,
+    evalGenerated: (date: string): string => `Generated ${date}`,
+    evalMacroF1: "Macro F1",
+    evalServedMacroF1: "Served macro F1",
+    evalThreshold: "Confidence threshold",
+    evalSampleSize: "Clauses evaluated",
+    colClass: "Class",
+    colPrecision: "Precision",
+    colRecall: "Recall",
+    colF1: "F1",
+    colSupport: "Support",
+    confusionTitle: "Confusion matrix",
+    confusionCorner: "True ╲ predicted",
+    confusionCaption:
+      "Each row is a true label and each column the label the classifier predicted; cells are shaded by their share of the row, so the diagonal reads as the recall of that class.",
+    confusionCellTitle: (
+      trueLabel: string,
+      predictedLabel: string,
+      count: number,
+      share: string,
+    ): string => `True ${trueLabel}, predicted ${predictedLabel}: ${count} (${share} of the row)`,
+
+    // --- Summary readability (AC-P04) ---
+    readabilityTitle: "Summary readability",
+    readabilityAvg: "Average grade",
+    readabilityMedian: "Median grade",
+    readabilityShare: "At or below target",
+    readabilitySample: "Summaries measured",
+    readabilityTarget: (grade: number): string =>
+      `PRD target: average Flesch-Kincaid grade ≤ ${grade} (AC-P04)`,
+    readabilityEmpty:
+      "No analyzed summaries yet — the built-in demo text is excluded from this measurement.",
+
+    // --- High-risk detection (AC-R05) ---
+    riskTitle: "High-risk detection",
+    riskTargets: (precision: string, recall: string): string =>
+      `PRD targets: precision ≥ ${precision}, recall ≥ ${recall} (AC-R05)`,
+    riskPrecision: "Precision",
+    riskRecall: "Recall",
+    riskF1: "F1",
+    riskSample: "Labeled clauses",
+    riskThreshold: "High-risk threshold",
+    riskNotMeasured: "Not yet measured — requires an LLM key (Phase 4).",
+    riskReason: "Reason:",
+    riskError: "Evaluation error:",
+    riskCaveats: "Caveats",
+    riskGenerated: (date: string): string => `Measured ${date}`,
+
+    // --- DSPy optimizer history (AC §4) ---
+    optimizerTitle: "DSPy optimizer history",
+    optimizerEmpty: "No optimizer run recorded yet.",
+    optimizerPath: "History file:",
+    colStarted: "Started",
+    colOptimizer: "Optimizer",
+    colAuto: "Auto",
+    colTrainVal: "Train / val",
+    colBaseline: "Baseline",
+    colBest: "Best",
+    colArtifact: "Artifact",
+    colTrialCount: "Trials",
+    trialsTitle: "Latest run — trials",
+    colTrial: "#",
+    colScore: "Score",
+    colInstruction: "Instruction preview",
   },
 
   errorPage: {

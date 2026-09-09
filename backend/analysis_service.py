@@ -32,11 +32,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import os
 import threading
 import time
 from collections.abc import Iterable
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 import anyio.to_thread
@@ -64,7 +64,7 @@ from error_codes import (
 from fake_llm import FakeAnalyzer
 from logger import get_logger
 from models import AnalysisRun, Contract, ContractFinding, ParsedClause, RiskScore
-from optimizer import load_optimized_analyzer
+from optimizer import load_optimized_analyzer, optimized_program_tag
 from pain_points import detect_missing_protections
 from schemas import ClauseAnalysisResult, ClauseInput
 from scoring import compute_hybrid_risk_level
@@ -164,19 +164,26 @@ def _build_analyzer():
 
 # Bump when scoring.py, the DSPy signature, or the sanitize/pain-point logic
 # changes in a way that should invalidate cached per-clause results.
-_PIPELINE_VERSION = "3"
+# "4": the program tag became content-addressed (sha256 of the artifact).
+_PIPELINE_VERSION = "4"
 
 
 def _optimized_program_tag() -> str:
-    """Cheap identity of the compiled DSPy program, so re-optimizing the
-    program (which changes the prompt/demos) invalidates the cache."""
-    from optimizer import OPTIMIZED_PROGRAM_PATH
+    """Identity of the compiled DSPy program, so re-optimizing the program
+    (which changes the prompt/demos) invalidates the cache."""
+    return optimized_program_tag()
 
-    try:
-        stat = os.stat(OPTIMIZED_PROGRAM_PATH)
-        return f"opt:{int(stat.st_mtime)}:{stat.st_size}"
-    except OSError:
-        return "opt:none"
+
+def program_identity() -> dict[str, Any]:
+    """The active DSPy program, for the evaluation dashboard (AC §4)."""
+    tag = optimized_program_tag()
+    return {
+        "optimized": tag != "opt:none",
+        "artifact_sha": tag.removeprefix("opt:") if tag != "opt:none" else None,
+        "dspy_version": dspy.__version__,
+        "pipeline_version": _PIPELINE_VERSION,
+        "fingerprint": pipeline_fingerprint(),
+    }
 
 
 def pipeline_fingerprint() -> str:
@@ -411,6 +418,37 @@ async def shutdown_analysis_tasks(drain_timeout: float = 5.0) -> None:
 # Execution
 # ---------------------------------------------------------------------------
 
+def finalize_clause_result(result: ClauseAnalysisResult) -> tuple[ClauseAnalysisResult, int]:
+    """Production post-processing of one Layer 2 result, applied in place.
+
+    UPL guardrail (AC-P02): prescriptive phrasing is rewritten to
+    observational phrasing before anything is persisted — in the summary
+    AND in every risk factor, since an LLM can slip advice into either.
+    Layer 3: the hybrid risk level blends the L1 confidence with the L2
+    output (db_writer applies the identical function when persisting, so
+    response and storage always agree). Returns the result and the number
+    of UPL rewrites it needed.
+    """
+    summary_result = sanitize(result.plain_language_summary)
+    result.plain_language_summary = summary_result.text
+    rewrites = summary_result.rewrites
+
+    cleaned_factors: list[str] = []
+    for factor in result.risk_factors:
+        factor_result = sanitize(factor)
+        cleaned_factors.append(factor_result.text)
+        rewrites += factor_result.rewrites
+    result.risk_factors = cleaned_factors
+
+    result.risk_level = compute_hybrid_risk_level(
+        clause_type=result.clause_type,
+        clause_type_confidence=result.clause_type_confidence,
+        dspy_risk_score=result.dspy_risk_score,
+        num_risk_factors=len(result.risk_factors),
+    )
+    return result, rewrites
+
+
 def _analyze_clause_blocking(analyzer, clause: ClauseInput) -> ClauseAnalysisResult | None:
     """Runs on a worker thread: analyze one clause with bounded retries.
 
@@ -492,21 +530,10 @@ async def _execute_run(run_id: UUID, contract_id: UUID, *, force: bool) -> None:
                     failed_ids.append(str(clause.parsed_clause_id))
                     return False
 
-                # UPL guardrail (AC-P02): prescriptive phrasing is rewritten
-                # to observational phrasing before anything is persisted —
-                # applied to BOTH the summary and each risk factor, since an
-                # LLM can slip advice into either field.
-                summary_result = sanitize(result.plain_language_summary)
-                result.plain_language_summary = summary_result.text
-                rewrites_here = summary_result.rewrites
-
-                cleaned_factors: list[str] = []
-                for factor in result.risk_factors:
-                    factor_result = sanitize(factor)
-                    cleaned_factors.append(factor_result.text)
-                    rewrites_here += factor_result.rewrites
-                result.risk_factors = cleaned_factors
-
+                # UPL guardrail (AC-P02) + Layer 3 blend: the same function the
+                # offline evaluation harness runs (eval/risk_eval.py), so the
+                # numbers it measures come from exactly this path.
+                result, rewrites_here = finalize_clause_result(result)
                 if rewrites_here:
                     upl_rewrites[0] += rewrites_here
                     logger.warning(
@@ -514,16 +541,6 @@ async def _execute_run(run_id: UUID, contract_id: UUID, *, force: bool) -> None:
                         rewrites_here,
                         clause.parsed_clause_id,
                     )
-
-                # Layer 3: blend L1 confidence with the L2 output. db_writer
-                # applies the identical function when persisting, so response
-                # and storage always agree.
-                result.risk_level = compute_hybrid_risk_level(
-                    clause_type=result.clause_type,
-                    clause_type_confidence=result.clause_type_confidence,
-                    dspy_risk_score=result.dspy_risk_score,
-                    num_risk_factors=len(result.risk_factors),
-                )
                 saved = await save_result_to_db(
                     result, content_hash=hashes[clause.parsed_clause_id]
                 )

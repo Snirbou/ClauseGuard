@@ -27,3 +27,10 @@ Thumbs.db
 
 # Local editor/agent settings
 .claude/settings.local.json
+
+# Real-contract evaluation corpus and the Layer 2 response cache. Both hold
+# contract text (the owner's signed agreements and the LLM output about them)
+# and must never enter git; only the metrics in backend/eval/results/ are
+# committed. See backend/eval/README.md.
+backend/eval/corpus/
+backend/eval/results/l2_cache.jsonl

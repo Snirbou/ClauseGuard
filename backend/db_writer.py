@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import insert
 from database import async_session_factory
 from logger import get_logger
 from models import RiskScore
+from optimizer import optimized_program_tag
 from schemas import ClauseAnalysisResult
 from scoring import compute_hybrid_risk_level
 
@@ -38,7 +39,9 @@ def _upsert_stmt(res: ClauseAnalysisResult, content_hash: str | None):
         risk_score=res.dspy_risk_score,
         risk_factors=res.risk_factors,
         plain_language_summary=res.plain_language_summary,
-        dspy_program_version=dspy.__version__,
+        # DSPy version + content hash of the compiled program (or opt:none),
+        # so every row records which prompt produced it (AC §4).
+        dspy_program_version=f"{dspy.__version__}+{optimized_program_tag()}",
         content_hash=content_hash,
     )
     return stmt.on_conflict_do_update(

@@ -399,6 +399,48 @@ def main() -> None:
         )
         client.delete(f"/api/contracts/{gap_id}")
 
+    # --- evaluation dashboard payload (AcceptanceCriteria section 4) -------
+    print("\n[8d] GET /api/metrics")
+    res = client.get("/api/metrics")
+    check("responds 200", res.status_code == 200, res.text[:200])
+    metrics = res.json()
+    check(
+        "run latency reports p50/p95/p99",
+        all(k in metrics["runs"] for k in ("p50_ms", "p95_ms", "p99_ms")),
+    )
+    readability = metrics.get("quality", {}).get("readability", {})
+    check(
+        "readability block present (AC-P04)",
+        isinstance(readability.get("sample_size"), int),
+        str(readability)[:160],
+    )
+    check(
+        "risk block reports a measured flag (AC-R05)",
+        isinstance(metrics.get("risk", {}).get("measured"), bool),
+        str(metrics.get("risk"))[:160],
+    )
+    program = metrics["pipeline"].get("dspy_program", {})
+    check(
+        "active DSPy program identity present",
+        bool(program.get("pipeline_version")) and "optimized" in program,
+        str(program)[:160],
+    )
+    check(
+        "optimizer history block present",
+        "runs" in metrics["pipeline"].get("optimizer_history", {}),
+        str(metrics["pipeline"].get("optimizer_history"))[:160],
+    )
+    classifier_block = metrics.get("classifier", {})
+    if classifier_block.get("mode") == "model":
+        evaluation = classifier_block.get("eval", {})
+        check(
+            "held-out confusion matrix is square and label-aligned",
+            bool(evaluation)
+            and len(evaluation["confusion_matrix"]) == len(evaluation["labels"])
+            and all(len(row) == len(evaluation["labels"]) for row in evaluation["confusion_matrix"]),
+            str(list(evaluation))[:160],
+        )
+
     # --- not found --------------------------------------------------------
     print("\n[9] GET /api/contracts/{unknown}")
     res = client.get("/api/contracts/00000000-0000-0000-0000-000000000000")

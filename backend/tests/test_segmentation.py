@@ -10,10 +10,10 @@ from __future__ import annotations
 import fitz
 import pytest
 
+from pdf_extract import extract_document_text
 from segmentation import (
     LineInfo,
     coverage_ratio,
-    extract_lines,
     segment_text,
     split_layout_headings,
 )
@@ -28,11 +28,9 @@ CLAUSE_BODIES = [
 
 
 def _extract(pdf_bytes: bytes) -> tuple[str, list[LineInfo]]:
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    page_texts = [p.get_text("text") for p in doc if p.get_text("text").strip()]
-    lines = extract_lines(doc)
-    doc.close()
-    return "\n\n".join(page_texts).strip(), lines
+    # The exact extraction main.py uses (pdf_extract is the shared seam).
+    extracted = extract_document_text(pdf_bytes)
+    return extracted.full_text, extracted.layout_lines
 
 
 def _pdf_from_text(body: str, fontname: str = "helv", fontsize: float = 10.0) -> bytes:

@@ -14,7 +14,6 @@ from typing import Any
 from uuid import UUID
 
 import anyio.to_thread
-import fitz  # PyMuPDF
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,6 +28,7 @@ from analysis_service import (
     distribution_from_levels,
     get_run,
     latest_run_for_contract,
+    program_identity,
     recover_stale_runs,
     shutdown_analysis_tasks,
     start_analysis,
@@ -66,6 +66,7 @@ from auth import (
     verify_password,
 )
 from classifier import classifier_info, classify, warm_up
+from eval_info import risk_eval_info
 from error_codes import (
     ANALYSIS_FAILED,
     AUTH_EMAIL_TAKEN,
@@ -86,7 +87,10 @@ from error_codes import (
     VALIDATION_ERROR,
     CodedHTTPException,
 )
-from segmentation import extract_lines, segment_text
+from optimizer import optimizer_history_info
+from pdf_extract import PasswordProtectedError, extract_document_text
+from readability import readability_summary
+from segmentation import segment_text
 from config import settings
 from database import get_db, init_db
 from logger import get_logger
@@ -380,39 +384,24 @@ def _extract_and_classify(raw_bytes: bytes, filename: str) -> list[dict[str, Any
     Runs on a worker thread — PyMuPDF is CPU-bound and would otherwise block
     the event loop for the duration of a large document.
     """
-    doc = None
+    # pdf_extract is the shared seam: tests and the eval scripts extract
+    # text through the same function, so offsets never drift.
     try:
-        doc = fitz.open(stream=raw_bytes, filetype="pdf")
-
-        if doc.needs_pass:
-            raise _upload_http_error(
-                filename,
-                "This PDF is password protected and cannot be read.",
-                code=UPLOAD_PASSWORD_PROTECTED,
-            )
-
-        page_texts: list[str] = []
-        for page in doc:
-            page_text = page.get_text("text") or ""
-            if page_text.strip():
-                page_texts.append(page_text)
-
-        # Typography (font sizes, bold flags) feeds the layout-based
-        # segmentation strategy; it must be read while the doc is open.
-        layout_lines = extract_lines(doc)
-    except HTTPException:
-        raise
+        extracted = extract_document_text(raw_bytes)
+    except PasswordProtectedError:
+        raise _upload_http_error(
+            filename,
+            "This PDF is password protected and cannot be read.",
+            code=UPLOAD_PASSWORD_PROTECTED,
+        ) from None
     except Exception:
         logger.exception("Failed to parse PDF %s", filename)
         raise _upload_http_error(
             filename, "Failed to parse PDF.", code=UPLOAD_PARSE_FAILED
         ) from None
-    finally:
-        # fitz documents hold an open handle on the stream buffer.
-        if doc is not None:
-            doc.close()
 
-    full_text = "\n\n".join(page_texts).strip()
+    full_text = extracted.full_text
+    layout_lines = extracted.layout_lines
     if not full_text:
         raise _upload_http_error(
             filename,
@@ -731,8 +720,25 @@ async def metrics(
         await db.execute(select(func.count()).select_from(DisclaimerLog))
     ).scalar_one()
 
+    # AC-P04 readability over the caller's own persisted summaries. Demo
+    # text is canned and would only measure fake_llm.py, so it is excluded.
+    summary_rows = (
+        await db.execute(
+            select(RiskScore.plain_language_summary)
+            .join(ParsedClause, ParsedClause.id == RiskScore.parsed_clause_id)
+            .join(Contract, Contract.id == ParsedClause.contract_id)
+            .where(Contract.user_id == user.id)
+            .where(RiskScore.plain_language_summary.is_not(None))
+            .order_by(RiskScore.created_at.desc())
+            .limit(2000)
+        )
+    ).scalars().all()
+    real_summaries = [s for s in summary_rows if s and not s.startswith("[Demo analysis")]
+    readability = readability_summary(real_summaries)
+    readability["demo_excluded"] = len(summary_rows) - len(real_summaries)
+
     return MetricsResponse(
-        classifier=classifier_info(),
+        classifier=classifier_info(include_eval=True),
         runs={
             "total": len(run_rows),
             "completed": sum(1 for r in run_rows if r.status == "completed"),
@@ -740,16 +746,22 @@ async def metrics(
             "active": sum(1 for r in run_rows if r.status in ("pending", "running")),
             "p50_ms": percentile(completed_times, 0.50),
             "p95_ms": percentile(completed_times, 0.95),
+            "p99_ms": percentile(completed_times, 0.99),
         },
         pipeline={
             "provider": settings.resolved_provider,
             "model": settings.DSPY_MODEL,
             "concurrency": settings.ANALYZE_CONCURRENCY,
             "max_retries": settings.ANALYZE_MAX_RETRIES,
+            # AC §4: active DSPy program version + optimizer history.
+            "dspy_program": program_identity(),
+            "optimizer_history": optimizer_history_info(),
         },
         compliance={
             "disclaimer_views_logged": disclaimer_count,
         },
+        quality={"readability": readability},
+        risk=risk_eval_info(),
     )
 
 

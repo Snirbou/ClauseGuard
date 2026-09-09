@@ -46,6 +46,10 @@ LOW_CONFIDENCE_THRESHOLD: float = 0.40
 _BACKEND_DIR = Path(__file__).resolve().parent
 _MODEL_PATH = _BACKEND_DIR / "models" / "clause_classifier_v1.joblib"
 _META_PATH = _MODEL_PATH.with_suffix("").with_suffix(".metadata.json")
+# Held-out evaluation of the artifact (confusion matrix, per-class P/R/F1 on
+# the official LEDGAR test split), written by
+# ml_training/scripts/07_spacy_model_ablation.py --sidecar. Dashboard only.
+_EVAL_PATH = _MODEL_PATH.with_suffix("").with_suffix(".eval.json")
 
 # The pickle references `src.pipeline.TextNormalizer`,
 # `src.features.LegalFeatureExtractor` and `src.nlp_singleton.lemma_tokenize`;
@@ -258,8 +262,33 @@ def classify(raw_text: str) -> tuple[str, float]:
     return mock_classify(raw_text)
 
 
-def classifier_info() -> dict[str, Any]:
-    """Live classifier status for /api/health and the evaluation dashboard."""
+_eval_cache: dict[str, Any] | None = None
+
+
+def classifier_eval() -> dict[str, Any] | None:
+    """The committed held-out evaluation sidecar, or None when absent/invalid.
+
+    Read once and cached: it is a static artifact (~10 KB with the 8x8
+    confusion matrix), served only through /api/metrics.
+    """
+    global _eval_cache
+    if _eval_cache is None:
+        try:
+            data = json.loads(_EVAL_PATH.read_text(encoding="utf-8"))
+            _eval_cache = data if isinstance(data, dict) else {}
+        except (OSError, ValueError) as exc:
+            logger.warning("Classifier eval sidecar unavailable (%s).", exc)
+            _eval_cache = {}
+    return _eval_cache or None
+
+
+def classifier_info(*, include_eval: bool = False) -> dict[str, Any]:
+    """Live classifier status for /api/health and the evaluation dashboard.
+
+    ``include_eval`` attaches the held-out confusion matrix and per-class
+    precision/recall (AcceptanceCriteria section 4); the health endpoint
+    leaves it out to stay small.
+    """
     info: dict[str, Any] = {
         "mode": _mode,
         "low_confidence_threshold": LOW_CONFIDENCE_THRESHOLD,
@@ -284,4 +313,8 @@ def classifier_info() -> dict[str, Any]:
                 "spacy_model_version_trained": _meta.get("spacy_model_version"),
             }
         )
+    if include_eval:
+        evaluation = classifier_eval()
+        if evaluation:
+            info["eval"] = evaluation
     return info

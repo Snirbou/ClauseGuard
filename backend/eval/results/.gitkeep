@@ -1,0 +1,3 @@
+# Committed evaluation metrics live here (segmentation_eval.json and friends).
+# Never contract text — see eval/README.md. This file keeps the directory in
+# git so the scripts can write into a fresh clone.
